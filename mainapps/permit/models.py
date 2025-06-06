@@ -15,7 +15,6 @@ class PermissionCategory(models.Model):
 
 
 class CombinedPermissions(models.TextChoices):
-    # Company Permissions
     CREATE_COMPANY = 'create_company', _('Can create company')
     READ_COMPANY = 'read_company', _('Can read company')
     UPDATE_COMPANY = 'update_company', _('Can update company')

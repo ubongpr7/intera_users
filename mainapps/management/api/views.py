@@ -19,7 +19,6 @@ from ..models import ActivityLog, StaffGroup, StaffRole, StaffRoleAssignment
 from .serializers import (
     CompanyProfileSerializer, 
     CompanyAddressSerializer, 
-    ActivityLogSerializer,
     StaffGroupSerializer,
     StaffRoleSerializer
 )
@@ -232,13 +231,13 @@ class RoleDetailView(generics.RetrieveUpdateAPIView):
 
 
 
-class UserActivityLogsAPIView(APIView):
-    permission_classes = [IsAuthenticated, HasModelRequestPermission]
-    def get(self, request, user_id):
-        user = get_object_or_404(User, id=user_id)
-        logs = ActivityLog.objects.filter(user=user).select_related('user').order_by('-timestamp')
-        serializer = ActivityLogSerializer(logs, many=True)
-        return Response(serializer.data)
+# class UserActivityLogsAPIView(APIView):
+#     permission_classes = [IsAuthenticated, HasModelRequestPermission]
+#     def get(self, request, user_id):
+#         user = get_object_or_404(User, id=user_id)
+#         logs = ActivityLog.objects.filter(user=user).select_related('user').order_by('-timestamp')
+#         serializer = ActivityLogSerializer(logs, many=True)
+#         return Response(serializer.data)
 
 class RoleDeactivateView(APIView):
     permission_classes=[IsAuthenticated,HasModelRequestPermission]

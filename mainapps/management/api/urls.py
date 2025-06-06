@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from . import views
 
 urlpatterns = [
-    path('activities/<str:user_id>/', views.UserActivityLogsAPIView.as_view(), name='create-company-address'),
+    # path('activities/<str:user_id>/', views.UserActivityLogsAPIView.as_view(), name='create-company-address'),
     
     path('company-profiles/', views.CreateCompanyProfileView.as_view(), name='create-company-profile'),
     path('company-addresses/', views.CreateCompanyAddressView.as_view(), name='create-company-address'),

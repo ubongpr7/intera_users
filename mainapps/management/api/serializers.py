@@ -1,10 +1,7 @@
 from rest_framework import serializers
-from mainapps.company.models import Company, CompanyAddress, Contact
-from mainapps.inventory.models import Inventory, InventoryCategory
 from mainapps.management.models import ActivityLog, CompanyProfile,CompanyProfileAddress, StaffGroup, StaffRole, StaffRoleAssignment
 from rest_framework import serializers
 
-from mainapps.orders.models import PurchaseOrder
 
 class CompanyAddressSerializer(serializers.ModelSerializer):
     class Meta:
@@ -19,50 +16,6 @@ class CompanyProfileSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'is_verified', 'verification_date', 'created_at', 'updated_at']
 
 
-class ActivityUserSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    username = serializers.CharField()
-    email = serializers.EmailField()
-
-class ActivityLogSerializer(serializers.ModelSerializer):
-    user = ActivityUserSerializer()
-    action = serializers.CharField(source='get_action_display')
-    model_identifier = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ActivityLog
-        fields = [
-            'id',
-            'user',
-            'action',
-            'model_name',
-            'object_id',
-            'timestamp',
-            'details',
-            'model_identifier'
-        ]
-        read_only_fields = fields
-
-        
-    def get_model_identifier(self, obj):
-        if obj.model_name=='inventory':
-            return f'{Inventory.objects.get(id= obj.object_id).name}'
-        elif obj.model_name=='companyprofile':
-            return f'{CompanyProfile.objects.get(id= obj.object_id).name}'
-        elif obj.model_name=='companyprofileaddress':
-            return f'{CompanyProfileAddress.objects.get(id= obj.object_id).street}'
-        elif obj.model_name=='company':
-            return  f'{Company.objects.get(id= obj.object_id).name}'
-        elif obj.model_name=='companyaddress':
-            return  f'{CompanyAddress.objects.get(id= obj.object_id).title}'
-        elif obj.model_name=='contact':
-            return  f'{Contact.objects.get(id= obj.object_id).role} - {Contact.objects.get(id= obj.object_id).email}'
-        elif obj.model_name=='inventorycategory':
-            return  f'{InventoryCategory.objects.get(id= obj.object_id).name}'
-        elif obj.model_name=='purchaseorder':
-            return  PurchaseOrder.objects.get(id= obj.object_id).reference
-        else:
-            return obj.object_id
 
 class StaffGroupSerializer(serializers.ModelSerializer):
     permission_num=serializers.SerializerMethodField()

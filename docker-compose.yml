@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: ubongpr7/inventoryv2:latest
+    image: ubongpr7/intera_users:latest
     env_file:
       - .env
     command: >
@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
 
   celery:
-    image: ubongpr7/inventoryv2:latest
+    image: ubongpr7/intera_users:latest
     env_file:
       - .env
     command: celery -A core worker --loglevel=info --pool=solo
