@@ -86,6 +86,7 @@ class User(AbstractUser, PermissionsMixin,models.Model):
         null=True
     
         )
+    
     email = models.EmailField(blank=False, null=True,unique=True)
     sex=models.CharField(
         max_length=20,
@@ -186,14 +187,3 @@ class VerificationCode(models.Model):
         self.slug=self.user.email
         super().save( *args,**kwargs)
     
-    class Meta:
-        # extra permissions
-        permissions= (
-            ('code','message'),
-            ('can_copy_code','Can copy code'),
-            ('can_share_code','Can share code'),
-
-        )
-
-
-

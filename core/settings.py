@@ -44,15 +44,11 @@ THIRD_PARTY_APPS=[
 CORE_APPS = [
     'mainapps.accounts',
     'mainapps.common',
-    'mainapps.company',
     'mainapps.content_type_linking_models',
-    'mainapps.inventory',
     'mainapps.management',
-    'mainapps.orders',
     'mainapps.permit',
-    'mainapps.product',
-    'mainapps.stock',
 ]
+
 INSTALLED_APPS=[
 ]
 INSTALLED_APPS.extend(DJ_DEFAULT_INSTALLED_APPS) 
