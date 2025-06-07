@@ -10,9 +10,7 @@ from mptt.models import MPTTModel, TreeForeignKey
 from django.utils.crypto import get_random_string
 from django.utils.text import slugify
 from django.conf import settings
-from django_countries.fields import CountryField
 from mainapps.common.validators import validate_city, validate_city_belongs_to_sub_region, validate_country, validate_postal_code, validate_region, validate_region_belongs_to_country, validate_sub_region
-from mainapps.content_type_linking_models.models import GenericModel
 User= settings.AUTH_USER_MODEL
 from django.core.validators import RegexValidator
 from django.core.exceptions import ValidationError

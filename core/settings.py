@@ -44,7 +44,6 @@ THIRD_PARTY_APPS=[
 CORE_APPS = [
     'mainapps.accounts',
     'mainapps.common',
-    'mainapps.content_type_linking_models',
     'mainapps.management',
     'mainapps.permit',
 ]
