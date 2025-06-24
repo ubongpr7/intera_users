@@ -1,7 +1,8 @@
 from django.contrib.auth import authenticate
+from rest_framework.decorators import action
 from django.contrib.auth.models import User
 from django.conf import settings
-from rest_framework import status
+from rest_framework import viewsets, status, filters
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.parsers import FileUploadParser
 from rest_framework.decorators import api_view
@@ -15,10 +16,12 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from mainapps.accounts.models import User,VerificationCode
 from mainapps.accounts.views import send_html_email
 from mainapps.common.settings import get_company_or_profile
-from mainapps.management.models import StaffRoleAssignment
+from mainapps.management.models import CompanyProfile, StaffRoleAssignment
+from mainapps.permit.api.serializers import PermissionDetailSerializer
 from .serializers import *
 from rest_framework.permissions import IsAuthenticated
 from mainapps.permit.permit import HasModelRequestPermission
+from rest_framework.throttling import AnonRateThrottle
 
 
 
@@ -44,70 +47,95 @@ def ge_route(request):
     return Response(route,status=201)
 
 class VerificationAPI(APIView):
-    def get(self, request):
-        pk = request.query_params.get('id')
+    throttle_classes = [AnonRateThrottle]
+
+    def post(self, request):
+        """Handle both sending verification code and verifying code submission (POST)"""
+        action = request.data.get('action')
+
+        if action == 'send_code':
+            return self.send_verification_code(request)
+        elif action == 'verify_code':
+            return self.verify_code(request)
+        else:
+            return Response(
+                {"error": "Invalid action. Use 'send_code' or 'verify_code'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    def send_verification_code(self, request):
+        """Send verification code via email"""
+        email = request.data.get('email')
+
+        if not email:
+            return Response(
+                {"error": "Email parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
-        if not pk:
-            return Response({"error": "User ID required"}, status=status.HTTP_400_BAD_REQUEST)
-
         try:
-
-            user = User.objects.get(pk=pk)
-            code = VerificationCode.objects.get(slug=user.email)
-            
-            
-            code.total_attempts += 1
-            code.save()
+            user = User.objects.get(email=email)
+            code, created = VerificationCode.objects.get_or_create(user=user)
+            code.save()  # Ensure the code is saved or updated
             
             send_html_email(
-                subject=f'Verification code: {code}',
-                message=str(code),
+                subject=f'Your Verification Code: {code.code}',
+                message=f'Use this code to verify your login: {code.code}',
                 to_email=[user.email],
                 html_file='accounts/verify.html'
             )
             
-            return Response("Confirmation code has been resent", status=status.HTTP_200_OK)
+            return Response(
+                {"message": "Verification code sent successfully"},
+                status=status.HTTP_200_OK
+            )
             
         except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-        except VerificationCode.DoesNotExist:
-            return Response({"error": "Verification code not found"}, status=status.HTTP_404_NOT_FOUND)
-
-    def post(self, request):
-        pk = request.data.get('userId')
-        print(pk)
-        code_input = request.data.get('code')
-        print(code_input)
-        if not pk or not code_input:
             return Response(
-                {"error": "Both user ID and code are required"},
+                {"error": "User  not found with this email"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    def verify_code(self, request):
+        """Verify code submission"""
+        email = request.data.get('email')
+        code_input = request.data.get('code')
+        
+        if not email or not code_input:
+            return Response(
+                {"error": "Both email and code are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         try:
-            user = User.objects.get(pk=pk)
-            verification_code = VerificationCode.objects.get(slug=user.email)
-            
-            if str(verification_code) == str(code_input):
-                verification_code.total_attempts=0
-                verification_code.save() 
-                user.is_verified = True
-                user.save()
-                
+            user = User.objects.get(email=email)
+            verification_code = VerificationCode.objects.get(user=user)
+
+            if str(verification_code.code) != code_input.strip():
                 return Response(
-                    {"message": "Authentication Successful"},
-                    status=status.HTTP_200_OK
+                    {"error": "Invalid verification code"},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-                
+
             return Response(
-                {"error": "Invalid verification code"},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "message": "Verification successful",
+                    "user_id": user.id,
+                    "email": user.email
+                },
+                status=status.HTTP_200_OK
             )
             
         except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "User  not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except VerificationCode.DoesNotExist:
-            return Response({"error": "Verification code not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "No active verification code for this user"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 class UserDetailView(APIView):
     permission_classes = [IsAuthenticated]
@@ -118,6 +146,44 @@ class UserDetailView(APIView):
         user = request.user
         serializer = MyUserSerializer(user)
         return Response(serializer.data)
+
+class UserReadOnlyView(viewsets.ReadOnlyModelViewSet):
+    serializer_class=MyUserSerializer
+    queryset= User.objects.all()
+
+    @action(detail=True, methods=['get'])
+    def permissions(self, request, pk=None):
+        if getattr(self, 'swagger_fake_view', False):
+            return PermissionDetailSerializer
+
+        user = self.get_object()
+        try:
+            from django.utils import timezone
+            current_time = timezone.now()
+            for role in request.user.roles.all().iterator():
+                if role.start_date and role.end_date:
+                    # Debug prints
+                    print(f"Current time: {current_time}")
+                    print(f"Role {role.id}: Start={role.start_date}, End={role.end_date}")
+
+                    if role.end_date < current_time:
+                        role.delete()
+                        print(f"Deleted inactive role {role.id}")
+                    else:
+                        perms = role.role.permissions.all().values_list('codename', flat=True)
+                        user_perms.update(perms)
+        except Exception as e:
+            print(f"Error: {e}")
+        try:
+            groups=request.user.staff_groups.all()
+            for group in groups:
+                user_perms.update(group.permissions.all().values_list('codename', flat=True))
+        except Exception as e:
+            print(e)
+        print(user_perms)
+        return Response(user_perms)    
+    
+
 
 class TokenGenerator(TokenObtainPairView):
     def post(self, request: Request, *args, **kwargs)  :
@@ -168,6 +234,7 @@ class RootUserRegistrationAPIView(APIView):
         serializer = RootUserCreateSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
+            user =serializer.instance
             code=VerificationCode.objects.get(slug=user.email)
             print(f'this is the code: {code}')
             subject=f'Verification code: {code}. {user.first_name} {user.last_name}'
@@ -175,6 +242,12 @@ class RootUserRegistrationAPIView(APIView):
             html_file='accounts/verify.html'
             to_email=user.email
             send_html_email(subject, message, [to_email],html_file)
+            profile=CompanyProfile.objects.create(
+                name=user.first_name,
+                owner=user,
+            )
+            user.profile = profile
+            user.save()
             return Response({
                 "id": user.id,
                 "email": user.email,

@@ -49,7 +49,7 @@ pycparser==2.22
 PyJWT==2.9.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
-python-util==1.2.1
+python-util==1.2.1x
 python-utils==3.8.2
 python3-openid==3.2.0
 pytz==2024.1

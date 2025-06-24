@@ -112,7 +112,7 @@ class User(AbstractUser, PermissionsMixin,models.Model):
         null=True,
         blank=True,
         related_name='staff',
-        editable=False
+        # editable=False
         
     )
 

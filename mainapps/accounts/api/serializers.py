@@ -66,7 +66,7 @@ class MyUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         exclude = ['last_login', 'is_superuser','is_verified', 'is_main', 'is_worker', 
-                 'is_staff', 'groups', 'user_permissions','date_joined', 'is_active']
+                 'is_staff', 'groups', 'user_permissions','date_joined', 'is_active', ]
         # read_only_fields = []
         extra_kwargs = {
             'password': {'write_only': True},
@@ -91,10 +91,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
         user = self.user  
-        try:
-            company_id = user.company.id
-        except user._meta.get_field("company").related_model.DoesNotExist:
-            company_id = None
+        
         data.update({
             'id': user.id,
             'username': user.username,
@@ -103,7 +100,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'is_verified': user.is_verified,
             'profile': user.profile.id if user.profile else None,
             'email': user.email,
-            'company': company_id,
             'first_name': user.first_name,
         })
         

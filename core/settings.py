@@ -90,7 +90,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
-"""
 
 DATABASES = {
     'default': {
@@ -110,6 +109,7 @@ DATABASES = {
         'PORT': os.getenv('DB_PORT'),
     }
 }
+"""
 
 
 # Password validation
@@ -259,13 +259,26 @@ CORS_ALLOW_METHODS = (
     "POST",
     "PUT",
 )
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+    'X-profile-id',  
+]
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "http://localhost:8001",
     "http://127.0.0.1:3000",
     'http://3.212.68.52:3000',
     "https://intera-inventory.vercel.app",
-    "http://3.84.22.207:3000"
+    "http://3.84.22.207:3000",
 
 ]
 

@@ -1,16 +1,7 @@
 services:
-  redis:
-    image: redis:latest
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - inventory_network
-    restart: unless-stopped
-
   web:
     image: ubongpr7/intera_users:latest
+    container_name: user-service
     env_file:
       - .env
     command: >
@@ -23,29 +14,10 @@ services:
       - .:/app
     ports:
       - "8000:8000"
-    depends_on:
-      - redis
     networks:
-      - inventory_network
+      - microservice-net
     restart: unless-stopped
-
-  celery:
-    image: ubongpr7/intera_users:latest
-    env_file:
-      - .env
-    command: celery -A core worker --loglevel=info --pool=solo
-    depends_on:
-      - redis
-      - web
-    volumes:
-      - .:/app
-    networks:
-      - inventory_network
-    restart: unless-stopped
-
-volumes:
-  redis_data:
 
 networks:
-  inventory_network:
-
+  microservice-net:
+    external: true

@@ -4,18 +4,10 @@ from django.conf import settings
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy as __
-from django.db.models import UniqueConstraint
 from django.contrib.contenttypes.fields import GenericRelation
-from django.utils.text import slugify
 
-from django.contrib.contenttypes.models import ContentType
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.core.signing import Signer
-from django.contrib.auth.models import Permission
-from mainapps.common.models import Address, Country, Currency, TypeOf,Attachment
-from mainapps.common.settings import  DEFAULT_CURRENCY_CODE, currency_code_mappings
+from mainapps.common.models import Address, Currency, Attachment
 from django.utils import timezone
-from datetime import timedelta
 from django.utils import timezone
 
 from mainapps.permit.models import CustomUserPermission
@@ -48,13 +40,23 @@ class ForecastMethods(models.TextChoices):
 # Create your models here.
 class CompanyProfileAddress(Address):
     pass
-
+class Industry(models.TextChoices):
+    MANUFACTURING = 'Manufacturing', _('Manufacturing')
+    RETAIL = 'Retail', _('Retail')
+    WHOLESALE = 'Wholesale', _('Wholesale')
+    LOGISTICS = 'Logistics', _('Logistics')
+    HEALTHCARE = 'Healthcare', _('Healthcare')
+    FOOD_AND_BEVERAGE = 'Food & Beverage', _('Food & Beverage')
+    TECHNOLOGY = 'Technology', _('Technology')
+    CONSTRUCTION = 'Construction', _('Construction')
+    PHARMACEUTICAL = 'Pharmaceutical', _('Pharmaceutical')
+    AUTOMOTIVE = 'Automotive', _('Automotive')
+    OTHER = 'Other', _('Other')
 class CompanyProfile(models.Model):
     class Meta:
         """Metaclass defines extra model options."""
 
         ordering = ['name']
-
         verbose_name_plural = 'Company Profile'
 
     po_sequence = models.PositiveIntegerField(default=0)
@@ -65,23 +67,24 @@ class CompanyProfile(models.Model):
         null=True,
         related_name='company',
         blank=True, 
-        editable=False
+        # editable=False
 
     )
     name = models.CharField(
         max_length=100,
         blank=False,
         # unique=True,
+        null=True,
         verbose_name=_('Company name'),
     )
     
-    industry=models.ForeignKey(
-        TypeOf,
-        on_delete=models.SET_NULL,
+    industry = models.CharField(
+        max_length=50,
+        choices=Industry.choices,
+        blank=True,
         null=True,
-        blank=False,
-        limit_choices_to={'which_model':'industry'}
-
+        verbose_name=_('Industry'),
+        help_text=_('Industry in which the company operates (optional)'),
     )
 
     description = models.CharField(
@@ -173,6 +176,7 @@ class CompanyProfile(models.Model):
         CompanyProfileAddress,
         on_delete=models.SET_NULL,
         null=True,
+        blank=True,
     )
 
     
@@ -192,7 +196,10 @@ class CompanyProfile(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
 
     updated_at = models.DateTimeField(auto_now=True)
-    
+    def get_staff_roles(self):
+        return StaffRole.objects.filter(profile=self)
+    def staff_groups(self):
+        return StaffGroup.objects.filter(profile=self)
     def __str__(self):
         if self.owner:
 
@@ -398,5 +405,161 @@ class ActivityLog(ProfileMixin):
 
     def __str__(self):
         return f"{self.user} {self.action} {self.model_name} {self.object_id}"
+
+
+class RecallPolicy(models.Model):
+    """Model for product recall policies"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    profile = models.ForeignKey(
+        'CompanyProfile', 
+        on_delete=models.CASCADE, 
+        related_name='recall_policies'
+    )
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    severity_levels = models.JSONField(
+        default=list,
+        help_text="List of severity levels and their descriptions"
+    )
+    notification_template = models.TextField(
+        blank=True,
+        help_text="Template for recall notifications"
+    )
+    contact_information = models.JSONField(
+        default=dict,
+        help_text="Contact information for recall management"
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_recall_policies'
+    )
     
+    def __str__(self):
+        return f"{self.name} - {self.profile.name}"
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Recall Policy"
+        verbose_name_plural = "Recall Policies"
+
+class ReorderStrategy(models.Model):
+    """Model for inventory reorder strategies"""
+    STRATEGY_CHOICES = [
+        ('fixed', 'Fixed Quantity'),
+        ('economic_order_quantity', 'Economic Order Quantity'),
+        ('min_max', 'Min-Max'),
+        ('periodic', 'Periodic Review'),
+        ('just_in_time', 'Just-in-Time'),
+        ('custom', 'Custom')
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    profile = models.ForeignKey(
+        'CompanyProfile', 
+        on_delete=models.CASCADE, 
+        related_name='reorder_strategies'
+    )
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    strategy_type = models.CharField(
+        max_length=30,
+        choices=STRATEGY_CHOICES,
+        default='fixed'
+    )
+    parameters = models.JSONField(
+        default=dict,
+        help_text="Parameters specific to the strategy type"
+    )
+    applies_to_categories = models.CharField(
+        blank=True,
+        max_length=255,
+        help_text="Comma-separated list of inventory categories this strategy applies to",
+        null=True
+        )
+    applies_to_all = models.BooleanField(
+        default=False,
+        help_text="If true, applies to all inventory items"
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_reorder_strategies'
+    )
+    
+    def __str__(self):
+        return f"{self.name} ({self.get_strategy_type_display()}) - {self.profile.name}"
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Reorder Strategy"
+        verbose_name_plural = "Reorder Strategies"
+
+class InventoryPolicy(models.Model):
+    """Model for general inventory management policies"""
+    POLICY_TYPE_CHOICES = [
+        ('expiry', 'Expiry Management'),
+        ('quality', 'Quality Control'),
+        ('storage', 'Storage Requirements'),
+        ('counting', 'Inventory Counting'),
+        ('valuation', 'Inventory Valuation'),
+        ('other', 'Other')
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    profile = models.ForeignKey(
+        'CompanyProfile', 
+        on_delete=models.CASCADE, 
+        related_name='inventory_policies'
+    )
+    name = models.CharField(max_length=100)
+    description = models.TextField()
+    policy_type = models.CharField(
+        max_length=20,
+        choices=POLICY_TYPE_CHOICES,
+        default='other'
+    )
+    details = models.JSONField(
+        default=dict,
+        help_text="Detailed policy configuration"
+    )
+    applies_to_categories = models.CharField(
+        blank=True,
+        max_length=255,
+        help_text="Comma-separated list of inventory categories this policy applies to",
+        null=True
+    )
+
+    applies_to_all = models.BooleanField(
+        default=False,
+        help_text="If true, applies to all inventory items"
+    )
+    effective_date = models.DateField(default=timezone.now)
+    expiry_date = models.DateField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_inventory_policies'
+    )
+    
+    def __str__(self):
+        return f"{self.name} ({self.get_policy_type_display()}) - {self.profile.name}"
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Inventory Policy"
+        verbose_name_plural = "Inventory Policies"
+
 registerable_models=[CompanyProfile,PrescriptionFillingPolicies,ActivityLog,StaffRoleAssignment,StaffRole,StaffGroup,CompanyProfileAddress]    

@@ -8,6 +8,7 @@ from rest_framework import generics
 from cities_light.models import Country, Region, SubRegion, City
 from .serializers import CountrySerializer, RegionSerializer, SubRegionSerializer, CitySerializer
 
+
 def get_currencies(request):
     currencies = currency_code_mappings()
     currency_list = [{"code": code, "name": name} for code, name in currencies]
@@ -33,14 +34,14 @@ class TypeOfListView(generics.ListAPIView):
         return queryset
     
 
+class UnitListView(generics.ListAPIView):
+    queryset = Unit.objects.all()
+    serializer_class = UnitSerializer
+
 
 class CountryListView(generics.ListAPIView):
     queryset = Country.objects.all()
     serializer_class = CountrySerializer
-
-class UnitListView(generics.ListAPIView):
-    queryset = Unit.objects.all()
-    serializer_class = UnitSerializer
 
 class RegionListView(generics.ListAPIView):
     serializer_class = RegionSerializer

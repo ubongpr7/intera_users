@@ -17,7 +17,7 @@ from mainapps.permit.permit import HasModelRequestPermission
 
 from ..models import ActivityLog, StaffGroup, StaffRole, StaffRoleAssignment
 from .serializers import (
-    CompanyProfileSerializer, 
+    CompanyProfileListSerializer, 
     CompanyAddressSerializer, 
     StaffGroupSerializer,
     StaffRoleSerializer
@@ -75,7 +75,7 @@ class CreateCompanyProfileView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         # request.data['owner'] = request.user.id
-        serializer = CompanyProfileSerializer(data=request.data)
+        serializer = CompanyProfileListSerializer(data=request.data)
         try:
 
             if serializer.is_valid():
@@ -106,14 +106,13 @@ class CreateCompanyProfileView(APIView):
     
 
 class OwnerCompanyProfileDetailView(generics.RetrieveAPIView):
-    serializer_class = CompanyProfileSerializer
+    serializer_class = CompanyProfileListSerializer
     permission_classes = [permissions.IsAuthenticated, HasModelRequestPermission]
 
     def get_object(self):
         print(self.request.user)
         return get_object_or_404(CompanyProfile, owner=self.request.user)
-
-
+    
 
 class CreateGroupView(APIView):
     permission_classes = [IsAuthenticated]
@@ -230,14 +229,6 @@ class RoleDetailView(generics.RetrieveUpdateAPIView):
     lookup_field= 'id'
 
 
-
-# class UserActivityLogsAPIView(APIView):
-#     permission_classes = [IsAuthenticated, HasModelRequestPermission]
-#     def get(self, request, user_id):
-#         user = get_object_or_404(User, id=user_id)
-#         logs = ActivityLog.objects.filter(user=user).select_related('user').order_by('-timestamp')
-#         serializer = ActivityLogSerializer(logs, many=True)
-#         return Response(serializer.data)
 
 class RoleDeactivateView(APIView):
     permission_classes=[IsAuthenticated,HasModelRequestPermission]

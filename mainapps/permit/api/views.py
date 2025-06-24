@@ -1,4 +1,3 @@
-# permissions/views.py
 from rest_framework import permissions, status
 from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.response import Response
@@ -8,13 +7,17 @@ from django.db.models import Exists, OuterRef
 from mainapps.management.models import StaffGroup,StaffRole, StaffRoleAssignment
 from mainapps.permit.permit import HasModelRequestPermission
 
-from .serializers import (PermissionDetailSerializer, RoleAssignmentSerializer,
+from .serializers import (
+    PermissionDetailSerializer, 
+    RoleAssignmentSerializer,
     RolePermissionUpdateSerializer, 
     UserPermissionUpdateSerializer,
     GroupPermissionUpdateSerializer,
     UserGroupUpdateSerializer,
-    GroupDetailSerializer
+    GroupDetailSerializer,
     )
+
+
 from mainapps.accounts.models import User  
 from mainapps.permit.models import CustomUserPermission
 from rest_framework.viewsets import ModelViewSet

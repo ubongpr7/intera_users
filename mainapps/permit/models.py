@@ -1,14 +1,26 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
+class ServiceChoices(models.TextChoices):
+    accommodation= 'accommodation',_('Accommodation')
+    dining= 'dining',_('Food and dining')
+    experience= 'experience',_('Experience and Evemts')
+    shopping= 'shopping',_('Shopping')
+    services= 'services',_('Services')
+    travel= 'travel',_('Travel')
+    # product_inventory='product_inventory',_('Product inventory') 
+
+
 class PermissionCategory(models.Model):
     name = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True)
     icon = models.CharField(max_length=30, blank=True)
+    service= models.CharField(max_length=255, choices=ServiceChoices.choices,default=ServiceChoices.accommodation)
     
     class Meta:
         verbose_name_plural = "Permission Categories"
         ordering = ['name']
+        
 
     def __str__(self):
         return self.name
@@ -175,6 +187,12 @@ class CombinedPermissions(models.TextChoices):
     GENERATE_STOCK_ITEM_REPORTS = 'generate_stock_item_reports', _('Can generate stock item reports')
     NOTIFY_USERS_ABOUT_STOCK_ITEM_STATUS = 'notify_users_about_stock_item_status', _('Can notify users about stock item status')
     MANAGE_STOCK_ITEM_SETTINGS = 'manage_stock_item_settings', _('Can manage stock item settings')
+    READ_STOCK_LOCATION = 'read_stock_location', _('Can read stock location')
+    UPDATE_STOCK_LOCATION = 'update_stock_location', _('Can update stock location')
+    DELETE_STOCK_LOCATION = 'delete_stock_location', _('Can delete stock location')
+    CREATE_STOCK_LOCATION = 'create_stock_location', _('Can create stock location')
+    MANAGE_STOCK_LOCATION_SETTINGS = 'manage_stock_location_settings', _('Can manage stock location settings')
+    VIEW_STOCK_LOCATION_REPORTS = 'view_stock_location_reports', _('Can view stock location reports')
 
 class CustomUserPermission(models.Model):
     codename = models.CharField(
@@ -218,5 +236,6 @@ class CustomUserPermission(models.Model):
             # Get human-readable name from TextChoices
             self.name = CombinedPermissions(self.codename).label
         super().save(*args, **kwargs)
+
 
 
