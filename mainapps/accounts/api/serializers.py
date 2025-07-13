@@ -87,11 +87,52 @@ class VerificationSerializer(serializers.Serializer):
     
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     
+
+    @classmethod
+    def get_all_permissions(self,user):
+        user_perms=set()
+
+        user_perms.update(user.custom_permissions.all().values_list('codename', flat=True))
+        try:
+            from django.utils import timezone
+            current_time = timezone.now()
+            for role in user.roles.all().iterator():
+                if role.start_date and role.end_date:
+                    
+                    if role.end_date < current_time:
+                        role.delete()
+                    else:
+                        perms = role.role.permissions.all().values_list('codename', flat=True)
+                        user_perms.update(perms)
+        except Exception as e:
+            print(f"Error: {e}")
+        try:
+            groups=user.staff_groups.all()
+            for group in groups:
+                user_perms.update(group.permissions.all().values_list('codename', flat=True))
+        except Exception as e:
+            print(e)
+        print('user_perms: ', user_perms)
+        return user_perms
     
+    @classmethod
+    def get_token(self,user):
+        token =super().get_token(user)
+        perms= self.get_all_permissions(user)
+        token['permissions']=list(perms)
+        profile_id= user.profile.id if user.profile else None
+        token['profile_id']=profile_id
+        owner_id=None
+        if user.profile:
+            owner_id = user.profile.owner.id
+            token['owner_id']=owner_id
+        return token
+
+
+
     def validate(self, attrs):
         data = super().validate(attrs)
         user = self.user  
-        
         data.update({
             'id': user.id,
             'username': user.username,
@@ -99,6 +140,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'is_main': user.is_main,
             'is_verified': user.is_verified,
             'profile': user.profile.id if user.profile else None,
+            'currency': user.profile.currency if user.profile else None,
             'email': user.email,
             'first_name': user.first_name,
         })

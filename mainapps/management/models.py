@@ -6,7 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy as __
 from django.contrib.contenttypes.fields import GenericRelation
 
-from mainapps.common.models import Address, Currency, Attachment
+from mainapps.common.models import Address, Attachment
 from django.utils import timezone
 from django.utils import timezone
 
@@ -164,9 +164,8 @@ class CompanyProfile(models.Model):
     )
     
 
-    currency=models.ForeignKey(
-        Currency,
-        on_delete=models.SET_NULL,
+    currency=models.CharField(
+        max_length=23,
         null=True,
         blank=True
     )
@@ -269,7 +268,8 @@ class StaffGroup(ProfileMixin):
     description = models.TextField(null=True, blank=True)
     def __str__(self):
         return self.name
-    
+    class Meta:
+        unique_together=('profile','name')
 class StaffRole(ProfileMixin):
     name = models.CharField(max_length=255)
     permissions = models.ManyToManyField(

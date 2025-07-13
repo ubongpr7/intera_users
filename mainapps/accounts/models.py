@@ -166,7 +166,14 @@ class User(AbstractUser, PermissionsMixin,models.Model):
             self.picture.delete()
         super().delete(*args, **kwargs)
     
-    
+class LinkedAccount(models.Model):
+    platform=models.CharField(max_length=255)
+    platform_user_id=models.UUIDField()
+    linked_at=models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE,related_name='linked_accounts')
+    class Meta:
+        unique_together=('platform','platform_user_id','user')
+
 class VerificationCode(models.Model):
     user=models.OneToOneField(User,on_delete=models.CASCADE)
     code=models.CharField(max_length=6,blank=True)

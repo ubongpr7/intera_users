@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import Exists, OuterRef
 
 from mainapps.management.models import StaffGroup,StaffRole, StaffRoleAssignment
-from mainapps.permit.permit import HasModelRequestPermission
+from mainapps.permit.permit import ActivityTrackingMixin, HasModelRequestPermission, PermissionRequiredMixin
 
 from .serializers import (
     PermissionDetailSerializer, 
@@ -22,10 +22,10 @@ from mainapps.accounts.models import User
 from mainapps.permit.models import CustomUserPermission
 from rest_framework.viewsets import ModelViewSet
 
-class UserPermissionManager(RetrieveUpdateAPIView):
+class UserPermissionManager(PermissionRequiredMixin,ActivityTrackingMixin,RetrieveUpdateAPIView):
     queryset = User.objects.all() 
     permission_classes = [permissions.IsAuthenticated,HasModelRequestPermission]
-
+    lookup_field='pk'
     def get_serializer_class(self):
         user = self.get_object()
 
@@ -85,9 +85,8 @@ class UserPermissionManager(RetrieveUpdateAPIView):
         return Response({'status': 'permissions updated'}, status=status.HTTP_200_OK)
     
     
-class GroupPermissionManager(RetrieveUpdateAPIView):
+class GroupPermissionManager(PermissionRequiredMixin,ActivityTrackingMixin,RetrieveUpdateAPIView):
     queryset = StaffGroup.objects.all() 
-    permission_classes = [permissions.IsAuthenticated,HasModelRequestPermission]
 
     def get_serializer_class(self):
         if getattr(self, 'swagger_fake_view', False):
@@ -145,7 +144,7 @@ class GroupPermissionManager(RetrieveUpdateAPIView):
         
         return Response({'status': 'permissions updated'}, status=status.HTTP_200_OK)
     
-class RolePermissionManager(RetrieveUpdateAPIView):
+class RolePermissionManager(PermissionRequiredMixin,ActivityTrackingMixin,RetrieveUpdateAPIView):
     queryset = StaffRole.objects.all() 
     permission_classes = [permissions.IsAuthenticated,HasModelRequestPermission]
 
@@ -209,9 +208,8 @@ class RolePermissionManager(RetrieveUpdateAPIView):
 
 
 
-class UserGroupManager(RetrieveUpdateAPIView):
+class UserGroupManager(PermissionRequiredMixin,ActivityTrackingMixin,RetrieveUpdateAPIView):
     queryset = User.objects.all() 
-    permission_classes = [permissions.IsAuthenticated,HasModelRequestPermission]
 
     def get_serializer_class(self):
         user = self.get_object()
@@ -261,7 +259,7 @@ class UserGroupManager(RetrieveUpdateAPIView):
             user.staff_groups.set(valid_groups)
         return Response({'status': 'permissions updated'}, status=status.HTTP_200_OK)
     
-class RoleAssignmentManager(ModelViewSet):
+class RoleAssignmentManager(PermissionRequiredMixin,ActivityTrackingMixin,ModelViewSet):
     queryset = StaffRoleAssignment.objects.all() 
     permission_classes = [permissions.IsAuthenticated,HasModelRequestPermission]
     serializer_class = RoleAssignmentSerializer

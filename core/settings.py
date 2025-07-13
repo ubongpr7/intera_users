@@ -8,7 +8,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-SECRET_KEY = 'django-insecure-pvc)e7cia$y25l0lc^b@#j+5c628x8+b(^eirvpgk3$z6^t8wh'
+SECRET_KEY = os.getenv('SECRET_KEY')
 
 DEBUG = True
 
@@ -25,7 +25,6 @@ DJ_DEFAULT_INSTALLED_APPS=[
     'django.contrib.staticfiles',
 ]
 THIRD_PARTY_APPS=[
-    "cities_light",
     'django_extensions',
      "rest_framework",
     "rest_framework.authtoken",
@@ -34,12 +33,9 @@ THIRD_PARTY_APPS=[
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'oauth2_provider',
-    'tinymce',
     'drf_yasg',
     'djoser',
     'social_django',
-    'schema_graph',
-    # 'sync_model',
 ]
 CORE_APPS = [
     'mainapps.accounts',
@@ -64,11 +60,9 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'corsheaders.middleware.CorsMiddleware',
-    'middleware.ip_address_middleware.IPBlackListMiddleware',
-    'middleware.time_zone.TimezoneMiddleware'
+   
 ]
 
-BANNED_IPS=['127.0.0.']
 
 ROOT_URLCONF = 'core.urls'
 AUTH_USER_MODEL = 'accounts.User' 
@@ -90,6 +84,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
+"""
 
 DATABASES = {
     'default': {
@@ -97,8 +92,8 @@ DATABASES = {
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
-
 """
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -109,16 +104,8 @@ DATABASES = {
         'PORT': os.getenv('DB_PORT'),
     }
 }
-"""
 
 
-# Password validation
-# https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
-# CITIES_LIGHT_TRANSLATION_LANGUAGES = ['fr', 'en']
-CITIES_LIGHT_TRANSLATION_LANGUAGES = ['en']
-
-# CITIES_LIGHT_INCLUDE_COUNTRIES = ['FR']
-CITIES_LIGHT_INCLUDE_CITY_TYPES = ['PPL', 'PPLA', 'PPLA2', 'PPLA3', 'PPLA4', 'PPLC', 'PPLF', 'PPLG', 'PPLL', 'PPLR', 'PPLS', 'STLMT',]
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -204,11 +191,11 @@ DJOSER = {
 
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=3),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=90),
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=2),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=6),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
-    'UPDATE_LAST_LOGIN': False,
+    'UPDATE_LAST_LOGIN': True,
     'ALGORITHM': 'HS256',
     'VERIFYING_KEY': None,
     'AUDIENCE': None,
@@ -290,7 +277,7 @@ TINYMCE_DEFAULT_CONFIG = {
     'selector': 'textarea',
     'theme': 'modern',
 }
-
+"""
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
@@ -300,8 +287,12 @@ CACHES = {
         }
     }
 }
+"""
 
 CELERY_BROKER_URL = 'redis://redis:6379/0'
 CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
 USE_L10N = True
 USE_THOUSAND_SEPARATOR = True
+
+# SERVICES
+COMMON_SERVICE_URL=os.getenv('COMMON_SERVICE_URL')

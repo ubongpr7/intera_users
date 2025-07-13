@@ -6,8 +6,10 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Q, Count, Avg
 from django.utils import timezone
 from datetime import timedelta
+from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
 
-from mainapps.permit.permit import HasModelRequestPermission
+from mainapps.permit.permit import ActivityTrackingMixin, HasModelRequestPermission, PermissionRequiredMixin
 from .serializers import (
     CompanyProfileListSerializer, CompanyProfileDetailSerializer,
     StaffRoleSerializer, StaffRoleListSerializer,
@@ -21,8 +23,11 @@ from .models import (
     CompanyProfile, Address, CompanyProfileAddress, StaffGroup, StaffRole, StaffRoleAssignment,
     ActivityLog, RecallPolicy, ReorderStrategy, InventoryPolicy
 )
+from django.contrib.auth import get_user_model
 
-class CompanyProfileViewSet( viewsets.ModelViewSet):
+User = get_user_model()
+
+class CompanyProfileViewSet(PermissionRequiredMixin,ActivityTrackingMixin, viewsets.ModelViewSet):
     """Enhanced ViewSet for company profile management"""
     queryset = CompanyProfile.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
@@ -54,7 +59,7 @@ class CompanyProfileViewSet( viewsets.ModelViewSet):
         serializer.save(owner=self.request.user)
     
     @action(detail=True, methods=['get'])
-    def staff(self, request, pk=None):
+    def staff_active_assignments(self, request, pk=None):
         """Get all staff members for this profile"""
         profile = self.get_object()
         
@@ -305,7 +310,7 @@ class CompanyProfileViewSet( viewsets.ModelViewSet):
         
         return Response(analytics)
 
-class StaffRoleViewSet( viewsets.ModelViewSet):
+class StaffRoleViewSet(PermissionRequiredMixin,ActivityTrackingMixin, viewsets.ModelViewSet):
     """ViewSet for staff role management"""
     queryset = StaffRole.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
@@ -394,8 +399,15 @@ class StaffRoleViewSet( viewsets.ModelViewSet):
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
+    
 
-class StaffGroupViewSet( viewsets.ModelViewSet):
+class RoleDeactivateView(APIView):
+    permission_classes=[IsAuthenticated,HasModelRequestPermission]
+    def post(self,request,role_id):
+        role= get_object_or_404(StaffRoleAssignment,id=role_id).delete()
+        return Response({'detail':'Role deleted successfully'},status=status.HTTP_200_OK)
+    
+class StaffGroupViewSet(PermissionRequiredMixin,ActivityTrackingMixin, viewsets.ModelViewSet):
     """ViewSet for staff group management"""
     queryset = StaffGroup.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
@@ -428,11 +440,8 @@ class StaffGroupViewSet( viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         """Set profile on creation"""
-        profile_id = self.request.headers.get('X-Profile-ID')
-        if profile_id:
-            serializer.save(profile_id=profile_id, created_by=self.request.user)
-        else:
-            serializer.save(created_by=self.request.user)
+        
+        serializer.save(profile=self.request.user.profile, created_by=self.request.user)
     
     @action(detail=True, methods=['get'])
     def users(self, request, pk=None):
@@ -520,10 +529,9 @@ class StaffGroupViewSet( viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-class CompanyProfileAddressViewSet( viewsets.ModelViewSet):
+class CompanyProfileAddressViewSet(PermissionRequiredMixin,ActivityTrackingMixin, viewsets.ModelViewSet):
     """ViewSet for address management"""
     queryset = CompanyProfileAddress.objects.all()
-    permission_classes = [IsAuthenticated, HasModelRequestPermission]
     required_permission = {
         'list': 'read_address',
         'retrieve': 'read_address',
@@ -558,9 +566,10 @@ class CompanyProfileAddressViewSet( viewsets.ModelViewSet):
         profile.headquarters_address=address
         profile.save()
 
-        
 
-class ActivityLogViewSet( viewsets.ReadOnlyModelViewSet):
+
+
+class ActivityLogViewSet(PermissionRequiredMixin, viewsets.ReadOnlyModelViewSet):
     """ViewSet for activity log viewing"""
     queryset = ActivityLog.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
@@ -576,13 +585,15 @@ class ActivityLogViewSet( viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         """Filter by profile if provided"""
         queryset = super().get_queryset()
-        profile_id = self.request.headers.get('X-Profile-ID')
-        if profile_id:
-            queryset = queryset.filter(
-                Q(model_name='CompanyProfile', object_id=profile_id) |
-                Q(details__profile_id=profile_id)
-            )
+        queryset = queryset.filter(profile = self.request.user.profile)
+        user_id= self.request.query_params.get('user_id')
+
+        if user_id:
+            user = User.objects.get(id = user_id)
+            queryset = queryset.filter(user = user)
+            
         return queryset
+    
 
 
 

@@ -14,8 +14,8 @@ from rest_framework.generics import ListAPIView
 from django.db.models import Prefetch
 from rest_framework_simplejwt.views import TokenObtainPairView
 from mainapps.accounts.models import User,VerificationCode
-from mainapps.accounts.views import send_html_email
 from mainapps.common.settings import get_company_or_profile
+from mainapps.email_system.emails import send_html_email
 from mainapps.management.models import CompanyProfile, StaffRoleAssignment
 from mainapps.permit.api.serializers import PermissionDetailSerializer
 from .serializers import *
@@ -24,22 +24,6 @@ from mainapps.permit.permit import HasModelRequestPermission
 from rest_framework.throttling import AnonRateThrottle
 
 
-
-class UploadProfileView(APIView):
-    parser_classes=[FileUploadParser]
-    def post(self, request ):
-        user=request.user
-        print(user)
-        picture=request.data["file"]
-        print(request.data["file"])
-        user.picture=picture
-        user.save()
-        #serializer=UserPictureSerializer(picture,data=request.data)
-        if user.picture==picture:
-            print("saved")
-            return Response("Profile picture updated Successfully",status=200)
-        else:
-            return Response("Error uploading picture!",status=400)
 
 @api_view(['GET'])
 def ge_route(request):
@@ -155,20 +139,16 @@ class UserReadOnlyView(viewsets.ReadOnlyModelViewSet):
     def permissions(self, request, pk=None):
         if getattr(self, 'swagger_fake_view', False):
             return PermissionDetailSerializer
-
+        user_perms=set()
         user = self.get_object()
         try:
             from django.utils import timezone
             current_time = timezone.now()
             for role in request.user.roles.all().iterator():
                 if role.start_date and role.end_date:
-                    # Debug prints
-                    print(f"Current time: {current_time}")
-                    print(f"Role {role.id}: Start={role.start_date}, End={role.end_date}")
-
+                  
                     if role.end_date < current_time:
                         role.delete()
-                        print(f"Deleted inactive role {role.id}")
                     else:
                         perms = role.role.permissions.all().values_list('codename', flat=True)
                         user_perms.update(perms)
@@ -206,17 +186,25 @@ class UserProfileView(APIView):
         user=User.objects.get(username=email)
         return Response({'user':user},status=200)
 
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken,OutstandingToken
+
+def logout_user_everywhere(user):
+    tokens= OutstandingToken.objects.filter(user=user)
+    for token in tokens:
+        BlacklistedToken.objects.get_or_create(token=token)
+
+def logout_user_in_current_device(token):
+    tokens= OutstandingToken.objects.filter(token=token)
+    for token in tokens:
+        obj,created=BlacklistedToken.objects.get_or_create(token=token)
+    
+
 class LogoutAPI(APIView):
     permission_classes = [IsAuthenticated]
-
     def post(self, request):
         try:
-            # request.user.auth_token.delete()
             token=request.data.get('refresh')
-            print('refresh_token',token)
-            token = RefreshToken(token)
-
-            token.blacklist()  # Add to blacklist
+            logout_user_in_current_device(token)
             return Response({"message": "Logged out successfully"}, status=200)
         except Exception as e:
             print(e)

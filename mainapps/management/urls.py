@@ -6,6 +6,7 @@ from .views import (
     InventoryPolicyViewSet,
     RecallPolicyViewSet,
     ReorderStrategyViewSet,
+    RoleDeactivateView,
     StaffRoleViewSet,
     StaffGroupViewSet,
     ActivityLogViewSet,
@@ -28,4 +29,6 @@ router.register(r'inventory-policies', InventoryPolicyViewSet, basename='invento
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('roles/<str:role_id>/deactivate/', RoleDeactivateView.as_view(), name='role-deactivate'),
+
 ]

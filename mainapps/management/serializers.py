@@ -62,23 +62,24 @@ class CompanyProfileDetailSerializer(serializers.ModelSerializer):
 class StaffRoleListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for staff role lists"""
     assignments_count = serializers.SerializerMethodField()
+    permission_count = serializers.SerializerMethodField()
     
     class Meta:
         model = StaffRole
-        fields = ['id', 'name', 'description',  'assignments_count', 'created_at']
+        fields = ['id', 'name', 'description',  'assignments_count', 'created_at','permission_count']
     
     def get_assignments_count(self, obj):
-        return obj.assignments.count()
+        return obj.assignments.count() or 0
+    
+    def get_permission_count(self,obj):
+        return obj.permissions.count()
 
 class StaffRoleSerializer(serializers.ModelSerializer):
     """Detailed serializer for staff roles"""
     created_by = MyUserSerializer(read_only=True)
     assignments_count = serializers.SerializerMethodField()
-    permissions_list = serializers.ListField(
-        child=serializers.CharField(),
-        source='permissions',
-        required=False
-    )
+    permission_count = serializers.SerializerMethodField()
+    
     
     class Meta:
         model = StaffRole
@@ -87,27 +88,30 @@ class StaffRoleSerializer(serializers.ModelSerializer):
     
     def get_assignments_count(self, obj):
         return obj.assignments.count()
+    def get_permission_count(self,obj):
+        return obj.permissions.count()
 
 class StaffGroupListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for staff group lists"""
     users_count = serializers.SerializerMethodField()
+    permission_count = serializers.SerializerMethodField()
+    
     
     class Meta:
         model = StaffGroup
-        fields = ['id', 'name', 'description',  'users_count', 'created_at']
+        fields = ['id', 'name', 'description',  'users_count', 'created_at','permission_count']
     
     def get_users_count(self, obj):
         return obj.users.count()
-
+    def get_permission_count(self,obj):
+        return obj.permissions.count()
 class StaffGroupSerializer(serializers.ModelSerializer):
     """Detailed serializer for staff groups"""
     created_by = MyUserSerializer(read_only=True)
     users_count = serializers.SerializerMethodField()
-    permissions_list = serializers.ListField(
-        child=serializers.CharField(),
-        source='permissions',
-        required=False
-    )
+    permission_count = serializers.SerializerMethodField()
+
+    
     
     class Meta:
         model = StaffGroup
@@ -117,6 +121,8 @@ class StaffGroupSerializer(serializers.ModelSerializer):
     def get_users_count(self, obj):
         return obj.users.count()
 
+    def get_permission_count(self,obj):
+        return obj.permissions.count()
 class StaffAssignmentSerializer(serializers.ModelSerializer):
     """Serializer for staff role assignments"""
     user = MyUserSerializer(read_only=True)

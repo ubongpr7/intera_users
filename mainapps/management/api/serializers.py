@@ -16,8 +16,35 @@ class CompanyProfileSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'is_verified', 'verification_date', 'created_at', 'updated_at']
 
 
+class ActivityUserSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    email = serializers.EmailField()
 
-class StaffGroupSerializer(serializers.ModelSerializer):
+class ActivityLogSerializer(serializers.ModelSerializer):
+    user = ActivityUserSerializer()
+    action = serializers.CharField(source='get_action_display')
+    model_identifier = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ActivityLog
+        fields = [
+            'id',
+            'user',
+            'action',
+            'model_name',
+            'object_id',
+            'timestamp',
+            'details',
+            'model_identifier'
+        ]
+        read_only_fields = fields
+
+        
+    def get_model_identifier(self, obj):
+        return obj.object_id
+
+class APIStaffGroupSerializer(serializers.ModelSerializer):
     permission_num=serializers.SerializerMethodField()
     users_num=serializers.SerializerMethodField()
     class Meta:
@@ -34,7 +61,7 @@ class StaffGroupSerializer(serializers.ModelSerializer):
             return obj.permissions.count()
         return 0
 
-class StaffRoleSerializer(serializers.ModelSerializer):
+class APIStaffRoleSerializer(serializers.ModelSerializer):
     permission_num=serializers.SerializerMethodField()
     users_num=serializers.SerializerMethodField()
 
