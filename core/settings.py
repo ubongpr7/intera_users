@@ -275,9 +275,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://3.84.22.207:3000",
     'https://agentic-caller-gvlu.onrender.com',
     'https://intera-inventory.vercel.app',
-    'dev.product.destinybuilders.africa',
-    'dev.inventory.destinybuilders.africa',
-    'dev.pos.destinybuilders.africa',
+    'https://dev.product.destinybuilders.africa',
+    'https://dev.inventory.destinybuilders.africa',
+    'https://dev.pos.destinybuilders.africa',
 ]
 
 
