@@ -12,15 +12,15 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 
 DEBUG = True
 
-# ALLOWED_HOSTS = [
-#     'localhost',
-#     '127.0.0.1',
-#     'dev.users.destinybuilders.africa',
-#      'inventory-service:8000'
-#     'common-service:8000',
-#     'product-service:8000'
-# ]
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    'dev.users.destinybuilders.africa',
+     'inventory-service:8000'
+    'user-service:8001',
+    '16.16.25.132'
+]
+# ALLOWED_HOSTS = ['*']
 
 # Application definition
 DJ_DEFAULT_INSTALLED_APPS=[
