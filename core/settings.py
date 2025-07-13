@@ -12,7 +12,11 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    'dev.users.destinybuilders.africa',
+]
 
 
 # Application definition
@@ -268,6 +272,14 @@ CORS_ALLOWED_ORIGINS = [
     "http://3.84.22.207:3000",
 
 ]
+
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+FILE_UPLOAD_TIMEOUT = 3600
+DATA_UPLOAD_MAX_MEMORY_SIZE = 2147483648  # 2GB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2147483648  # 2GB
 
 TINYMCE_DEFAULT_CONFIG = {
     'height': 360,
