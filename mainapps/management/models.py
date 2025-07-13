@@ -52,6 +52,7 @@ class Industry(models.TextChoices):
     PHARMACEUTICAL = 'Pharmaceutical', _('Pharmaceutical')
     AUTOMOTIVE = 'Automotive', _('Automotive')
     OTHER = 'Other', _('Other')
+
 class CompanyProfile(models.Model):
     class Meta:
         """Metaclass defines extra model options."""
@@ -270,6 +271,7 @@ class StaffGroup(ProfileMixin):
         return self.name
     class Meta:
         unique_together=('profile','name')
+
 class StaffRole(ProfileMixin):
     name = models.CharField(max_length=255)
     permissions = models.ManyToManyField(

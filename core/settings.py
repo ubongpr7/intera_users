@@ -155,8 +155,8 @@ EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 465  
 EMAIL_USE_SSL = True
 EMAIL_USE_TLS = False
-EMAIL_HOST_USER = "ubongpr7@gmail.com"
-EMAIL_HOST_PASSWORD = "nmcmiwlgwdrwesef"
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD =os.getenv('EMAIL_HOST_PASSWORD')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
     
@@ -270,6 +270,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://3.212.68.52:3000',
     "https://intera-inventory.vercel.app",
     "http://3.84.22.207:3000",
+    'https://agentic-caller-gvlu.onrender.com/',
 
 ]
 
