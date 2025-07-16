@@ -28,9 +28,6 @@ class RootUserCreateSerializer(serializers.ModelSerializer):
         user = User.objects.create_user(**validated_data)
         user.is_main=True
         user.save()
-
-    
-
         return user
 
 class StaffUserCreateSerializer(serializers.ModelSerializer):
