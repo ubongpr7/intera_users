@@ -278,6 +278,8 @@ CORS_ALLOWED_ORIGINS = [
     'https://dev.product.destinybuilders.africa',
     'https://dev.inventory.destinybuilders.africa',
     'https://dev.pos.destinybuilders.africa',
+    'https://pos-app-snowy.vercel.app',
+
 ]
 
 
