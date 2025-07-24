@@ -579,6 +579,9 @@ class ModelVersion(models.Model):
     @property
     def provider(self):
         return self.llm.provider
+    def __str__(self):
+        return f"{self.model_name} - {self.provider}"
+
 
 class ProfileAgent(models.Model):
     profile = models.OneToOneField(CompanyProfile, related_name='agent', on_delete=models.CASCADE)
