@@ -563,7 +563,7 @@ class InventoryPolicy(models.Model):
         ordering = ['-created_at']
         verbose_name = "Inventory Policy"
         verbose_name_plural = "Inventory Policies"
-        
+
 class LLMProviderChoices(models.TextChoices):
     gpt= ('chatgpt', 'Chat GPT')
     gemini = ('gemini','Gemini')
@@ -599,4 +599,4 @@ class ProfileAgent(models.Model):
     def __str__(self):
         return f"Agent {self.name} - {self.model_name} - {self.provider} for {self.profile}"
         
-registerable_models=[CompanyProfile,PrescriptionFillingPolicies,ActivityLog,StaffRoleAssignment,StaffRole,StaffGroup,CompanyProfileAddress,ProfileAgent]    
+registerable_models=[CompanyProfile,PrescriptionFillingPolicies,ActivityLog,StaffRoleAssignment,StaffRole,StaffGroup,CompanyProfileAddress,ProfileAgent,LLMModel,ModelVersion]    
