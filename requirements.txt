@@ -82,3 +82,12 @@ graphviz
 weasyprint
 django-sync-model
 django-synchro
+
+langchain_tavily
+django-mcp-server
+langchain-mcp-adapters
+mcp
+langgraph
+langchain
+python-dotenv
+langchain-google-genai

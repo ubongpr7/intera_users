@@ -43,6 +43,9 @@ THIRD_PARTY_APPS=[
     'drf_yasg',
     'djoser',
     'social_django',
+    'mcp_server',   
+    
+
 ]
 CORE_APPS = [
     'mainapps.accounts',
@@ -195,6 +198,7 @@ DJOSER = {
     'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': os.getenv('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', '').split(','),
 }
 
+DJANGO_MCP_AUTHENTICATION_CLASSES=["rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication"]
 
 
 SIMPLE_JWT = {

@@ -563,5 +563,38 @@ class InventoryPolicy(models.Model):
         ordering = ['-created_at']
         verbose_name = "Inventory Policy"
         verbose_name_plural = "Inventory Policies"
+class LLMProviderChoices(models.TextChoices):
+    gpt= ('chatgpt', 'Chat GPT')
+    gemini = ('gemini','Gemini')
+    grok = ('grok', 'Grok')
 
-registerable_models=[CompanyProfile,PrescriptionFillingPolicies,ActivityLog,StaffRoleAssignment,StaffRole,StaffGroup,CompanyProfileAddress]    
+class LLMModel(models.Model):
+    provider = models.CharField(max_length=255, choices=LLMProviderChoices.choices)
+
+class ModelVersion(models.Model):
+    llm = models.ForeignKey(LLMModel, on_delete=models.CASCADE)
+    model_name = models.CharField(max_length=255,)
+
+    @property
+    def provider(self):
+        return self.llm.provider
+
+class ProfileAgent(ProfileMixin):
+    name= models.CharField(max_length=255,)
+    api_key= models.CharField(max_length=1000,)
+    tavily_api_key = models.CharField(max_length=1000,)
+    version = models.ForeignKey(ModelVersion,on_delete=models.CASCADE)
+    special_instruction = models.TextField(blank=True)
+    system_instruction = models.TextField(blank=True)
+    assistant_instruction = models.TextField(blank=True)
+
+    @property
+    def provider(self):
+        return self.version.provider
+    @property
+    def model_name(self):
+        return self.version.model_name
+    def __str__(self):
+        return f"Agent {self.name} - {self.model_name} - {self.provider} for {self.profile}"
+        
+registerable_models=[CompanyProfile,PrescriptionFillingPolicies,ActivityLog,StaffRoleAssignment,StaffRole,StaffGroup,CompanyProfileAddress,ProfileAgent]    
