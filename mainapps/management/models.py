@@ -563,6 +563,7 @@ class InventoryPolicy(models.Model):
         ordering = ['-created_at']
         verbose_name = "Inventory Policy"
         verbose_name_plural = "Inventory Policies"
+        
 class LLMProviderChoices(models.TextChoices):
     gpt= ('chatgpt', 'Chat GPT')
     gemini = ('gemini','Gemini')
@@ -579,7 +580,8 @@ class ModelVersion(models.Model):
     def provider(self):
         return self.llm.provider
 
-class ProfileAgent(ProfileMixin):
+class ProfileAgent(models.Model):
+    profile = models.OneToOneField(CompanyProfile, related_name='agent', on_delete=models.CASCADE)
     name= models.CharField(max_length=255,)
     api_key= models.CharField(max_length=1000,)
     tavily_api_key = models.CharField(max_length=1000,)

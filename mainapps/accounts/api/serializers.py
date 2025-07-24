@@ -140,6 +140,12 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'currency': user.profile.currency if user.profile else None,
             'email': user.email,
             'first_name': user.first_name,
+            'model_name':user.profile.agent.model_name if user.profile and user.profile.agent else None,
+            'agent_name':user.profile.agent.name if user.profile and user.profile.agent else '',
+            'provider':user.profile.agent.provider if user.profile and user.profile.agent else None,
+            'api_key':user.profile.agent.api_key if user.profile and user.profile.agent else None,
+            'tavily_api_key':user.profile.agent.tavily_api_key if user.profile and user.profile.agent else None,
+            
         })
         
         return data 
