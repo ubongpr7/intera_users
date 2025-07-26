@@ -268,6 +268,7 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
     'X-profile-id',  
+    'MCP-Protocol-Version'
 ]
 
 CORS_ALLOWED_ORIGINS = [
