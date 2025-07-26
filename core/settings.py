@@ -198,9 +198,9 @@ DJOSER = {
     'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': os.getenv('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', '').split(','),
 }
 
-DJANGO_MCP_AUTHENTICATION_CLASSES=["rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication"]
+# DJANGO_MCP_AUTHENTICATION_CLASSES=["rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication"]
 
-
+DJANGO_MCP_AUTHENTICATION_CLASSES=["rest_framework.authentication.TokenAuthentication"]
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=2),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=6),
