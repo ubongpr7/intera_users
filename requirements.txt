@@ -91,3 +91,4 @@ langgraph
 langchain
 python-dotenv
 langchain-google-genai
+uvicorn
