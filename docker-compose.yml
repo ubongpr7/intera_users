@@ -8,7 +8,7 @@ services:
       sh -c "
         python manage.py makemigrations &&
         python manage.py migrate &&
-        uvicorn core.asgi:application --reload --host 0.0.0.0 --port 8001
+        python manage.py runserver 0.0.0.0:8001
       "
     volumes:
       - .:/app
