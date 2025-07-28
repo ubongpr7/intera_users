@@ -18,7 +18,8 @@ ALLOWED_HOSTS = [
     'dev.users.destinybuilders.africa',
      'inventory-service:8000'
     'user-service:8001',
-    '16.16.25.132'
+    '16.16.25.132',
+    '13.62.37.188'
 ]
 # ALLOWED_HOSTS = ['*']
 
