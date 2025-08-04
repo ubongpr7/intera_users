@@ -119,11 +119,11 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['permissions']=list(perms)
         profile_id= user.profile.id if user.profile else None
         token['profile_id']=profile_id
-        token['agent_name']=user.profile.agent.name if user.profile and user.profile.agent else ''
-        token['model_name']=user.profile.agent.model_name if user.profile and user.profile.agent else None
-        token['provider']=user.profile.agent.provider if user.profile and user.profile.agent else None
-        token['api_key']=user.profile.agent.api_key if user.profile and user.profile.agent else None
-        token['tavily_api_key']=user.profile.agent.tavily_api_key if user.profile and user.profile.agent else None
+        # token['agent_name']=user.profile.agent.name if user.profile and user.profile.agent else ''
+        # token['model_name']=user.profile.agent.model_name if user.profile and user.profile.agent else None
+        # token['provider']=user.profile.agent.provider if user.profile and user.profile.agent else None
+        # token['api_key']=user.profile.agent.api_key if user.profile and user.profile.agent else None
+        # token['tavily_api_key']=user.profile.agent.tavily_api_key if user.profile and user.profile.agent else None
         owner_id=None
         if user.profile:
             owner_id = user.profile.owner.id
