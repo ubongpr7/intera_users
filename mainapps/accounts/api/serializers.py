@@ -114,49 +114,46 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     
     @classmethod
     def get_token(self,user):
+        profile = getattr(user, 'profile', None)
         token =super().get_token(user)
         perms= self.get_all_permissions(user)
         token['permissions']=list(perms)
         profile_id= user.profile.id if user.profile else None
         token['profile_id']=profile_id
         token['email']=user.email
-        token['agent_name']=user.profile.agent.name if user.profile and user.profile.agent else ''
-        token['model_name']=user.profile.agent.model_name if user.profile and user.profile.agent else None
-        token['provider']=user.profile.agent.provider if user.profile and user.profile.agent else None
-        token['api_key']=user.profile.agent.api_key if user.profile and user.profile.agent else None
-        token['tavily_api_key']=user.profile.agent.tavily_api_key if user.profile and user.profile.agent else None
-        owner_id=None
-        if user.profile:
-            owner_id = user.profile.owner.id
-            token['owner_id']=owner_id
+        agent = profile.agent if profile and hasattr(profile, 'agent') else None
+        token['agent_name'] = agent.name if agent else ''
+        token['model_name'] = agent.model_name if agent else None
+        token['provider'] = agent.provider if agent else None
+        token['api_key'] = agent.api_key if agent else None
+        token['tavily_api_key'] = agent.tavily_api_key if agent else None
+        token['owner_id'] = profile.owner.id if profile and hasattr(profile, 'owner') else None
         return token
-
-
 
     def validate(self, attrs):
         data = super().validate(attrs)
-        user = self.user  
+        user = self.user
+        profile = getattr(user, 'profile', None)
+        agent = profile.agent if profile and hasattr(profile, 'agent') else None
+
         data.update({
             'id': user.id,
             'username': user.username,
-            'is_worker': user.is_worker,
-            'is_main': user.is_main,
-            'is_verified': user.is_verified,
-            'profile': user.profile.id if user.profile else None,
-            'currency': user.profile.currency if user.profile else None,
+            'is_worker': getattr(user, 'is_worker', False),
+            'is_main': getattr(user, 'is_main', False),
+            'is_verified': getattr(user, 'is_verified', False),
+            'profile': profile.id if profile else None,
+            'currency': profile.currency if profile else None,
             'email': user.email,
-            'first_name': user.first_name,
-            'model_name':user.profile.agent.model_name if user.profile and user.profile.agent else None,
-            'agent_name':user.profile.agent.name if user.profile and user.profile.agent else '',
-            'provider':user.profile.agent.provider if user.profile and user.profile.agent else None,
-            'api_key':user.profile.agent.api_key if user.profile and user.profile.agent else None,
-            'tavily_api_key':user.profile.agent.tavily_api_key if user.profile and user.profile.agent else None,
-            
+            'first_name': getattr(user, 'first_name', ''),
+            'model_name': agent.model_name if agent else None,
+            'agent_name': agent.name if agent else '',
+            'provider': agent.provider if agent else None,
+            'api_key': agent.api_key if agent else None,
+            'tavily_api_key': agent.tavily_api_key if agent else None,
         })
-        
-        return data 
-    
-           
+
+        return data           
 
 
 class UserPermissionSerializer(serializers.ModelSerializer):
