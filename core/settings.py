@@ -44,9 +44,6 @@ THIRD_PARTY_APPS=[
     'drf_yasg',
     'djoser',
     'social_django',
-    'mcp_server',   
-    
-
 ]
 CORE_APPS = [
     'mainapps.accounts',
@@ -199,9 +196,7 @@ DJOSER = {
     'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': os.getenv('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', '').split(','),
 }
 
-DJANGO_MCP_AUTHENTICATION_CLASSES=["rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication"]
 
-# DJANGO_MCP_AUTHENTICATION_CLASSES=["rest_framework.authentication.TokenAuthentication"]
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=2),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=6),
@@ -269,7 +264,6 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
     'X-profile-id',  
-    'MCP-Protocol-Version'
 ]
 
 CORS_ALLOWED_ORIGINS = [

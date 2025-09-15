@@ -1,3 +1,4 @@
+from cryptography.fernet import Fernet
 from django.db import models
 import uuid 
 from django.conf import settings
@@ -582,6 +583,7 @@ class ModelVersion(models.Model):
     def __str__(self):
         return f"{self.model_name} - {self.provider}"
 
+cipher = Fernet(settings.SECRET_KEY)
 
 class ProfileAgent(models.Model):
     profile = models.OneToOneField(CompanyProfile, related_name='agent', on_delete=models.CASCADE)
@@ -592,6 +594,13 @@ class ProfileAgent(models.Model):
     special_instruction = models.TextField(blank=True)
     system_instruction = models.TextField(blank=True)
     assistant_instruction = models.TextField(blank=True)
+    # def set_sensitive_data(self, raw_data):
+    #     encrypted_data = cipher.encrypt(raw_data.encode())
+    #     self.encrypted_field = encrypted_data.decode()
+
+    # def get_sensitive_data(self):
+    #     decrypted_data = cipher.decrypt(self.encrypted_field.encode())
+    #     return decrypted_data.decode()
 
     @property
     def provider(self):
