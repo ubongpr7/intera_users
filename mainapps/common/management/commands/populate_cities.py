@@ -6,14 +6,6 @@ from cities_light.models import Country, Region, SubRegion, City
 class Command(BaseCommand):
     help = 'Import Nigerian cities from custom text file'
     
-    ADMIN1_MAP = {  # Map admin1 codes to state names
-        '05': 'Lagos',
-        '22': 'Cross River',
-        '26': 'Benue',
-        '29': 'Kano',
-        '35': 'Borno',
-        # Add all admin1 codes from your data
-    }
 
     def add_arguments(self, parser):
         parser.add_argument('file_path', type=str, help='Path to the Nigeria cities text file')

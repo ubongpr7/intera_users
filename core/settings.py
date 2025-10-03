@@ -15,11 +15,8 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
-    'dev.users.destinybuilders.africa',
-     'inventory-service:8000'
-    'user-service:8001',
-    '16.16.25.132',
-    '13.62.37.188'
+    'dev.accounts.interaims.com',
+    
 ]
 # ALLOWED_HOSTS = ['*']
 
@@ -273,12 +270,12 @@ CORS_ALLOWED_ORIGINS = [
     'http://3.212.68.52:3000',
     "https://intera-inventory.vercel.app",
     "http://3.84.22.207:3000",
-    'https://agentic-caller-gvlu.onrender.com',
     'https://intera-inventory.vercel.app',
-    'https://dev.product.destinybuilders.africa',
-    'https://dev.inventory.destinybuilders.africa',
-    'https://dev.pos.destinybuilders.africa',
-    'https://pos-app-snowy.vercel.app',
+    'https://dev.product.interaims.com',
+    'https://dev.inventory.interaims.com',
+    'https://dev.pos.interaims.com',
+    'https://www.interaims.com',
+    'https://interaims.com',
 
 ]
 
