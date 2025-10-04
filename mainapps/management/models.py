@@ -1,3 +1,4 @@
+import os
 from cryptography.fernet import Fernet
 from django.db import models
 import uuid 
@@ -582,8 +583,9 @@ class ModelVersion(models.Model):
         return self.llm.provider
     def __str__(self):
         return f"{self.model_name} - {self.provider}"
+FERNET_KEY = os.getenv("FERNET_KEY", "FvW0XGQpL0cAxmB9hJ0qj7VwOx2z6l3cT8P9c8rbZgk=")
 
-cipher = Fernet(settings.SECRET_KEY)
+cipher = Fernet(FERNET_KEY)
 
 class ProfileAgent(models.Model):
     profile = models.OneToOneField(CompanyProfile, related_name='agent', on_delete=models.CASCADE)
