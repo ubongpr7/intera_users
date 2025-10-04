@@ -1,29 +1,50 @@
-# name: Deploy to EC2
+name: Deploy to EC2
 
-# on:
-#   push:
-#     branches: [main]
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Allow manual triggering
 
-# jobs:
-#   deploy:
-#     runs-on: ubuntu-latest
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-#     steps:
-#     - name: Checkout code
-#       uses: actions/checkout@v4
+    - name: Add known hosts
+      run: |
+        mkdir -p ~/.ssh
+        ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
-#     - name: Add known hosts
-#       run: |
-#         mkdir -p ~/.ssh
-#         ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-#     - name: Setup SSH
-#       uses: webfactory/ssh-agent@v0.8.0
-#       with:
-#         ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+    - name: Deploy to EC2
+      run: |
+        ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          set -e  # Exit on any error
+          
+          echo "Starting deployment..."
+          
+          # Switch to root if needed
+          sudo su - << 'SUDO_EOF'
+            cd /home/ubuntu/dev/intera_users
+            
+            echo "Pulling latest changes..."
+            git pull origin main
+            
+            echo "Deployment completed successfully!"
+        SUDO_EOF
+        EOF
 
-#     - name: Deploy to EC2
-#       run: |
-#         ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "
-#           cd /dev/atc_backend
-#           git pull origin main
+    - name: Health Check
+      run: |
+        sleep 10  # Wait for service to start
+        ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          # Check if service is running (adjust URL/port as needed)
+          curl -f http://localhost:8001/health || echo "Health check failed - please verify deployment"
+        EOF
