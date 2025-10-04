@@ -1,7 +1,6 @@
 services:
   web:
-    build: .
-    image: ubongpr7/intera_users:latest
+    image: ubongpr7/inventoryv2:latest
     container_name: user-service
     env_file:
       - .env
@@ -15,11 +14,11 @@ services:
       - .:/app
     ports:
       - "8001:8001"
-    networks:
-      - microservice-net
+    # networks:
+    #   - microservice-net
     restart: unless-stopped
 
-networks:
-  microservice-net:
-    external: true
+# networks:
+#   microservice-net:
+#     external: true
 
