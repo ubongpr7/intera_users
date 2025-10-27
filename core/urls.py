@@ -13,7 +13,7 @@ from schema_graph.views import Schema
 
 schema_view = get_schema_view(
    openapi.Info(
-      title="Quick Campaign API",
+      title="Intera API Users",
       default_version='v1',
       description="Test description",
       terms_of_service="https://www.google.com/policies/terms/",
@@ -37,11 +37,9 @@ urlpatterns = [
     path("schema/", Schema.as_view()),
 
     # db sync
-
     path('api/v1/accounts/', include("mainapps.accounts.api.urls")),
     path('permission_api/', include("mainapps.permit.api.urls",)),
     path('management/', include("mainapps.management.urls")),
-    # path('management_api/', include("mainapps.management.api.urls")),
     path('common_api/', include("mainapps.common.api.urls")),
     
 ]
