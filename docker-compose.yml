@@ -1,24 +1,22 @@
 services:
   web:
-    image: ubongpr7/inventoryv2:latest
-    container_name: user-service
+    build:
+      context: .
+    container_name: intera-users
     env_file:
       - .env
     command: >
       sh -c "
-        python manage.py makemigrations &&
-        python manage.py migrate &&
-        python manage.py runserver 0.0.0.0:8001
+        uv run manage.py makemigrations &&
+        uv run manage.py migrate &&
+        uv run manage.py runserver 0.0.0.0:7001
       "
     volumes:
       - .:/app
+      - venv:/app/.venv
     ports:
-      - "8001:8001"
-    # networks:
-    #   - microservice-net
+      - "7001:7001"
     restart: unless-stopped
 
-# networks:
-#   microservice-net:
-#     external: true
-
+volumes:
+  venv:

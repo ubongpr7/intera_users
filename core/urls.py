@@ -44,7 +44,6 @@ urlpatterns = [
     # path('management_api/', include("mainapps.management.api.urls")),
     path('common_api/', include("mainapps.common.api.urls")),
     
-    path("", include('mcp_server.urls')),
 ]
 
 

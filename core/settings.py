@@ -89,7 +89,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
-"""
 
 DATABASES = {
     'default': {
@@ -110,6 +109,7 @@ DATABASES = {
     }
 }
 
+"""
 
 AUTH_PASSWORD_VALIDATORS = [
     {
