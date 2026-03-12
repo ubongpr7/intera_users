@@ -7,6 +7,8 @@ requires-python = ">=3.13"
 dependencies = [
     "boto3>=1.40.56",
     "celery>=5.5.3",
+    "confluent-kafka>=2.13.2",
+    "dj-database-url>=3.1.2",
     "django>=5.2.7",
     "django-cities-light>=3.10.2",
     "django-cors-headers>=4.9.0",
@@ -24,6 +26,8 @@ dependencies = [
     "oauth2-provider>=0.0",
     "pillow>=12.0.0",
     "psycopg[binary]>=3.2.12",
+    "pyotp>=2.9.0",
+    "qrcode>=8.2",
     "redis>=6.4.0",
     "sendgrid-django>=4.2.0",
     "social-auth-app-django>=5.6.0",

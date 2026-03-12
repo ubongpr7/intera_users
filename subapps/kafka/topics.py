@@ -1,0 +1,8 @@
+IDENTITY_USER_TOPIC = "identity.user"
+IDENTITY_COMPANY_PROFILE_TOPIC = "identity.company_profile"
+IDENTITY_MEMBERSHIP_TOPIC = "identity.membership"
+
+CATALOG_PRODUCT_TOPIC = "catalog.product"
+CATALOG_VARIANT_TOPIC = "catalog.variant"
+INVENTORY_AVAILABILITY_TOPIC = "inventory.availability"
+POS_ORDER_TOPIC = "pos.order"

@@ -1,10 +1,9 @@
-from rest_framework import serializers,exceptions
-from rest_framework.validators import UniqueValidator
+from rest_framework import serializers
 from mainapps.accounts.models import User
-from django.contrib.auth import authenticate
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from mainapps.management.api.serializers import StaffRoleAssignmentSerializer
+from mainapps.profile.api.serializers import StaffRoleAssignmentSerializer
 from mainapps.permit.models import CustomUserPermission
+from mainapps.accounts.serializers import MyTokenObtainPairSerializer as CoreTokenObtainPairSerializer
 
 from django.contrib.auth.password_validation import validate_password
 
@@ -23,15 +22,19 @@ class RootUserCreateSerializer(serializers.ModelSerializer):
 
 
     def create(self, validated_data):
-        re_password = validated_data.pop("re_password", None)
-        
-        user = User.objects.create_user(**validated_data)
-        user.is_main=True
-        user.save()
-        return user
+        validated_data.pop("re_password", None)
+        return User.objects.create_user(**validated_data)
+    
+    def validate(self, attrs):
+        password = attrs.get("password")
+        re_password = attrs.get("re_password")
+        if password != re_password:
+            raise serializers.ValidationError({"re_password": "Passwords do not match"})
+        validate_password(password)
+        return attrs
 
 class StaffUserCreateSerializer(serializers.ModelSerializer):
-    password = serializers.CharField( required=True,)
+    password = serializers.CharField(write_only=True, required=True)
 
     class Meta:
         model = User
@@ -43,15 +46,11 @@ class StaffUserCreateSerializer(serializers.ModelSerializer):
 
 
     def create(self, validated_data):
-        
-        user = User.objects.create_user(**validated_data)
-        user.is_main=False
-        user.is_worker=True
-        user.save()
-
+        return User.objects.create_user(**validated_data)
     
-
-        return user
+    def validate(self, attrs):
+        validate_password(attrs.get("password"))
+        return attrs
 
 
 class LogoutSerializer(serializers.Serializer):
@@ -62,13 +61,13 @@ class MyUserSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = User
-        exclude = ['last_login', 'is_superuser','is_verified', 'is_main', 'is_worker', 
-                 'is_staff', 'groups', 'user_permissions','date_joined', 'is_active', ]
-        # read_only_fields = []
-        extra_kwargs = {
-            'password': {'write_only': True},
-            'email': {'required': True}
-        }
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'phone', 'picture', 'sex',
+            'is_verified', 'is_staff',
+            'date_of_birth', 'profile', 'custom_permissions', 'roles',
+        ]
+        read_only_fields = ['id', 'is_verified', 'is_staff']
+        extra_kwargs = {'email': {'required': True}}
     
     def get_roles(self, obj):
         active_assignments = obj.roles.filter(is_active=True)
@@ -82,78 +81,8 @@ class UserPictureSerializer(serializers.ModelSerializer):
 class VerificationSerializer(serializers.Serializer):
     code=serializers.IntegerField()
     
-class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
-    
-
-    @classmethod
-    def get_all_permissions(self,user):
-        user_perms=set()
-
-        user_perms.update(user.custom_permissions.all().values_list('codename', flat=True))
-        try:
-            from django.utils import timezone
-            current_time = timezone.now()
-            for role in user.roles.all().iterator():
-                if role.start_date and role.end_date:
-                    
-                    if role.end_date < current_time:
-                        role.delete()
-                    else:
-                        perms = role.role.permissions.all().values_list('codename', flat=True)
-                        user_perms.update(perms)
-        except Exception as e:
-            print(f"Error: {e}")
-        try:
-            groups=user.staff_groups.all()
-            for group in groups:
-                user_perms.update(group.permissions.all().values_list('codename', flat=True))
-        except Exception as e:
-            print(e)
-        print('user_perms: ', user_perms)
-        return user_perms
-    
-    @classmethod
-    def get_token(self,user):
-        profile = getattr(user, 'profile', None)
-        token =super().get_token(user)
-        perms= self.get_all_permissions(user)
-        token['permissions']=list(perms)
-        profile_id= user.profile.id if user.profile else None
-        token['profile_id']=profile_id
-        token['email']=user.email
-        agent = profile.agent if profile and hasattr(profile, 'agent') else None
-        token['agent_name'] = agent.name if agent else ''
-        token['model_name'] = agent.model_name if agent else None
-        token['provider'] = agent.provider if agent else None
-        token['api_key'] = agent.api_key if agent else None
-        token['tavily_api_key'] = agent.tavily_api_key if agent else None
-        token['owner_id'] = profile.owner.id if profile and hasattr(profile, 'owner') else None
-        return token
-
-    def validate(self, attrs):
-        data = super().validate(attrs)
-        user = self.user
-        profile = getattr(user, 'profile', None)
-        agent = profile.agent if profile and hasattr(profile, 'agent') else None
-
-        data.update({
-            'id': user.id,
-            'username': user.username,
-            'is_worker': getattr(user, 'is_worker', False),
-            'is_main': getattr(user, 'is_main', False),
-            'is_verified': getattr(user, 'is_verified', False),
-            'profile': profile.id if profile else None,
-            'currency': profile.currency if profile else None,
-            'email': user.email,
-            'first_name': getattr(user, 'first_name', ''),
-            'model_name': agent.model_name if agent else None,
-            'agent_name': agent.name if agent else '',
-            'provider': agent.provider if agent else None,
-            'api_key': agent.api_key if agent else None,
-            'tavily_api_key': agent.tavily_api_key if agent else None,
-        })
-
-        return data           
+class MyTokenObtainPairSerializer(CoreTokenObtainPairSerializer):
+    pass
 
 
 class UserPermissionSerializer(serializers.ModelSerializer):

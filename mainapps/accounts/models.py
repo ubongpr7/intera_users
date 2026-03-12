@@ -1,17 +1,14 @@
 import os
 import random
+from datetime import timedelta
 from PIL import Image
 from django.db import models
-from django.urls import reverse
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.conf import settings
 from django.db.models import Q
-from django.conf import settings
-from django.contrib.auth.models import PermissionsMixin
 from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
 from mainapps.common.models import Address
-
-
 from mainapps.permit.models import CustomUserPermission
 
 
@@ -33,8 +30,8 @@ SEX=(
 )
 
 
-def get_upload_path(instance,filename):
-    return os.path.join('images','avartar',str(instance.pk,filename))
+def get_upload_path(instance, filename):
+    return os.path.join('images', 'avatar', str(instance.pk or "unknown"), filename)
 
 
 
@@ -56,6 +53,8 @@ class CustomUserManager(BaseUserManager):
             raise ValueError("The Email field must be set")
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
+        if not user.username:
+            user.username = email
         user.set_password(password)
         user.save(using=self._db)
         return user
@@ -73,7 +72,7 @@ class CustomUserManager(BaseUserManager):
             user = self.create_user(email, password, **extra_fields)
             return user
 
-class User(AbstractUser, PermissionsMixin,models.Model):
+class User(AbstractUser):
     phone = models.CharField(
         max_length=60, 
         blank=True, 
@@ -87,7 +86,7 @@ class User(AbstractUser, PermissionsMixin,models.Model):
     
         )
     
-    email = models.EmailField(blank=False, null=True,unique=True)
+    email = models.EmailField(blank=False, null=False, unique=True, db_index=True)
     sex=models.CharField(
         max_length=20,
         choices=SEX,
@@ -95,19 +94,16 @@ class User(AbstractUser, PermissionsMixin,models.Model):
         blank=True,
         null=True
     )
-    is_verified=models.BooleanField(default=False)
-    is_staff=models.BooleanField(default=False)
-    is_subscriber=models.BooleanField(default=False)
-    is_worker=models.BooleanField(default=False, editable=False)
-    is_main = models.BooleanField(editable=False,default=False)
+    is_verified = models.BooleanField(default=False)
+    is_staff = models.BooleanField(default=False)
     date_of_birth = models.DateField(
         verbose_name='Date Of Birth',
         help_text='You must be above 18 years of age.',
         blank=True,
         null=True,
     )
-    profile=models.ForeignKey(
-        'management.CompanyProfile',
+    profile = models.ForeignKey(
+        'profile.CompanyProfile',
         on_delete=models.CASCADE,
         null=True,
         blank=True,
@@ -121,13 +117,17 @@ class User(AbstractUser, PermissionsMixin,models.Model):
         related_name='users',
         blank=True
     )
+    mfa_secret = models.CharField(max_length=255, blank=True, null=True)
+    mfa_enabled = models.BooleanField(default=False)
+    has_setup_mfa = models.BooleanField(default=False)
     
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
     objects = CustomUserManager()
   
     def save(self, *args, **kwargs):
-        self.username = self.email
+        if self.email and (not self.username or self.username != self.email):
+            self.username = self.email
         super().save(*args, **kwargs)
 
 
@@ -166,6 +166,11 @@ class User(AbstractUser, PermissionsMixin,models.Model):
             self.picture.delete()
         super().delete(*args, **kwargs)
     
+    @property
+    def role(self):
+        assignment = self.roles.filter(is_active=True).select_related("role").first()
+        return assignment.role.name if assignment else None
+    
 class LinkedAccount(models.Model):
     platform=models.CharField(max_length=255)
     platform_user_id=models.UUIDField()
@@ -175,22 +180,67 @@ class LinkedAccount(models.Model):
         unique_together=('platform','platform_user_id','user')
 
 class VerificationCode(models.Model):
+    EMAIL = "email"
+    VERIFICATION_TYPES = (
+        (EMAIL, "Email"),
+    )
+    CODE_TTL_MINUTES = 10
+    MAX_ATTEMPTS = 5
+
     user=models.OneToOneField(User,on_delete=models.CASCADE)
+    verification_type = models.CharField(max_length=32, choices=VERIFICATION_TYPES, default=EMAIL)
     code=models.CharField(max_length=6,blank=True)
     slug=models.SlugField(editable=False,blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
     time_requested=models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
     successful_attempts=models.IntegerField(default=0)
     total_attempts=models.IntegerField(default=0)
+
     def __str__(self):
         return self.code
-    def save(self, *args,**kwargs):
-        nums=[i for i in range(1,9)]
-        code_list=[]
-        for i in range(6):
-            n=random.choice(nums)
-            code_list.append(n)
-        code_string="".join(str(i)  for i in code_list)
-        self.code=code_string
-        self.slug=self.user.email
-        super().save( *args,**kwargs)
+
+    @staticmethod
+    def generate_code(length=6):
+        nums = [str(i) for i in range(10)]
+        code_list = [random.choice(nums) for _ in range(length)]
+        return "".join(code_list)
+
+    @classmethod
+    def default_expiry(cls):
+        return timezone.now() + timedelta(minutes=cls.CODE_TTL_MINUTES)
+
+    def regenerate(self, save=True):
+        self.code = self.generate_code()
+        self.expires_at = self.default_expiry()
+        self.total_attempts = 0
+        self.successful_attempts = 0
+        self.slug = self.user.email
+        if save:
+            self.save(update_fields=["code", "expires_at", "total_attempts", "successful_attempts", "slug", "time_requested"])
+        return self
+
+    def mark_failed_attempt(self):
+        self.total_attempts += 1
+        self.save(update_fields=["total_attempts", "time_requested"])
+
+    def mark_successful_attempt(self):
+        self.successful_attempts += 1
+        self.save(update_fields=["successful_attempts", "time_requested"])
+
+    def is_valid(self):
+        if self.total_attempts >= self.MAX_ATTEMPTS:
+            return False
+        if not self.expires_at:
+            return False
+        return timezone.now() <= self.expires_at
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = self.generate_code()
+        if not self.slug and self.user_id:
+            self.slug = self.user.email
+        if not self.expires_at:
+            self.expires_at = self.default_expiry()
+        super().save(*args, **kwargs)
     

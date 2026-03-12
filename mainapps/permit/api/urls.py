@@ -1,31 +1,41 @@
-from django.urls import path
-from .views import RoleAssignmentManager, UserGroupManager, UserPermissionManager,GroupPermissionManager,RolePermissionManager
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from django.urls import path, include
-router= DefaultRouter()
-router.register(r'roles', RoleAssignmentManager, basename='role-assignment')
+
+from .views import (
+    GroupAccessViewSet,
+    RoleAccessViewSet,
+    RoleAssignmentViewSet,
+    UserAccessViewSet,
+)
+
+router = DefaultRouter()
+router.register(r"role-assignments", RoleAssignmentViewSet, basename="role-assignment")
+router.register(r"users", UserAccessViewSet, basename="user-access")
+router.register(r"groups", GroupAccessViewSet, basename="group-access")
+router.register(r"roles", RoleAccessViewSet, basename="role-access")
+
 urlpatterns = [
-    path('role-assignments/', include(router.urls)),
+    path("", include(router.urls)),
     path(
-        'users/<str:pk>/permissions/',
-        UserPermissionManager.as_view(),
-        name='user-permissions-manage'
+        "user/<str:pk>/groups/",
+        UserAccessViewSet.as_view({"get": "groups", "put": "groups"}),
+        name="manage-user-groups-legacy",
     ),
     path(
-        'groups/<str:pk>/permissions/',
-        GroupPermissionManager.as_view(),
-        name='group-permissions-manage'
+        "role-assignments/roles/",
+        RoleAssignmentViewSet.as_view({"get": "list", "post": "create"}),
+        name="legacy-role-assignment-list",
     ),
     path(
-        'roles/<str:pk>/permissions/',
-        RolePermissionManager.as_view(),
-        name='role-permissions-manage'
+        "role-assignments/roles/<str:pk>/",
+        RoleAssignmentViewSet.as_view(
+            {
+                "get": "retrieve",
+                "put": "update",
+                "patch": "partial_update",
+                "delete": "destroy",
+            }
+        ),
+        name="legacy-role-assignment-detail",
     ),
-    path(
-        'user/<str:pk>/groups/',
-        UserGroupManager.as_view(),
-        name='manage-user-groups-'
-    ),
-
 ]
-

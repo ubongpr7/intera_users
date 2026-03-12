@@ -1,6 +1,10 @@
 
 import os
+from datetime import timedelta
 from pathlib import Path
+
+import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,15 +16,68 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('SECRET_KEY')
 
-DEBUG = True
+if not SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY must be set.")
 
-ALLOWED_HOSTS = [
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
+
+# Logging
+# Django's default logging config won't show `logger.info(...)` from our modules unless you
+# define `LOGGING`. This ensures Kafka consumers/producers log to stdout (Docker logs).
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+DJANGO_LOG_LEVEL = os.getenv("DJANGO_LOG_LEVEL", LOG_LEVEL).upper()
+KAFKA_LOG_LEVEL = os.getenv("KAFKA_LOG_LEVEL", LOG_LEVEL).upper()
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "console": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "console",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": LOG_LEVEL,
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": DJANGO_LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": ["console"],
+            "level": DJANGO_LOG_LEVEL,
+            "propagate": False,
+        },
+        "subapps.kafka": {
+            "handlers": ["console"],
+            "level": KAFKA_LOG_LEVEL,
+            "propagate": False,
+        },
+    },
+}
+
+_default_allowed_hosts = [
     'localhost',
     '127.0.0.1',
     'dev.accounts.interaims.com',
     'host.docker.internal'
     
 ]
+_allowed_hosts_env = os.getenv("ALLOWED_HOSTS", "").strip()
+ALLOWED_HOSTS = (
+    [host.strip() for host in _allowed_hosts_env.split(",") if host.strip()]
+    if _allowed_hosts_env
+    else _default_allowed_hosts
+)
 # ALLOWED_HOSTS = ['*']
 
 # Application definition
@@ -49,7 +106,8 @@ THIRD_PARTY_APPS=[
 CORE_APPS = [
     'mainapps.accounts',
     'mainapps.common',
-    'mainapps.management',
+    'mainapps.kafka_reliability',
+    'mainapps.profile',
     'mainapps.permit',
 ]
 
@@ -99,14 +157,11 @@ if LOCAL_SERVER:
     }
 else:
     DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME'),
-            'USER': os.getenv('DB_USER'),
-            'PASSWORD': os.getenv('DB_PASSWORD'),
-            'HOST': os.getenv('DB_HOST'),
-            'PORT': os.getenv('DB_PORT'),
-        }
+        'default': dj_database_url.config(
+            default=os.getenv('DATABASE_URL'),
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
     }
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -169,8 +224,38 @@ AUTHENTICATION_BACKENDS = [
 
     'django.contrib.auth.backends.ModelBackend',
 ]
-import os
-from datetime import timedelta
+
+
+def _read_key_from_env(value_var: str, path_var: str) -> str | None:
+    """Read PEM key either from raw env value or a file path env."""
+    key_value = os.getenv(value_var)
+    if key_value:
+        return key_value.replace("\\n", "\n")
+
+    key_path = os.getenv(path_var)
+    if not key_path:
+        return None
+
+    try:
+        with open(key_path, "r", encoding="utf-8") as key_file:
+            return key_file.read()
+    except OSError as exc:
+        raise ImproperlyConfigured(f"Unable to read JWT key file '{key_path}': {exc}") from exc
+
+
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "RS256")
+JWT_SIGNING_KEY = _read_key_from_env("JWT_PRIVATE_KEY", "JWT_PRIVATE_KEY_PATH")
+JWT_VERIFYING_KEY = _read_key_from_env("JWT_PUBLIC_KEY", "JWT_PUBLIC_KEY_PATH")
+
+if JWT_ALGORITHM.upper().startswith(("RS", "ES")):
+    if not JWT_SIGNING_KEY:
+        raise ImproperlyConfigured(
+            "JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH must be set when using RS/ES algorithms."
+        )
+    if not JWT_VERIFYING_KEY:
+        raise ImproperlyConfigured(
+            "JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH must be set when using RS/ES algorithms."
+        )
 
 # DJOSER CONFIGURATION
 DJOSER = {
@@ -186,6 +271,9 @@ DJOSER = {
     'TOKEN_MODEL': 'rest_framework.authtoken.models.Token',  
 
     'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': os.getenv('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', '').split(','),
+    'PERMISSIONS': {
+        'user_create': ['rest_framework.permissions.AllowAny'],
+    },
 }
 
 
@@ -195,13 +283,15 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
-    'ALGORITHM': 'HS256',
-    'VERIFYING_KEY': None,
-    'AUDIENCE': None,
-    'ISSUER': None,
-    'JWK_URL': None,
+    'ALGORITHM': JWT_ALGORITHM,
+    'SIGNING_KEY': JWT_SIGNING_KEY if JWT_SIGNING_KEY else SECRET_KEY,
+    'VERIFYING_KEY': JWT_VERIFYING_KEY,
+    # Treat empty strings as unset so we don't enforce/emit `aud`/`iss` with "".
+    'AUDIENCE': os.getenv("JWT_AUDIENCE") or None,
+    'ISSUER': os.getenv("JWT_ISSUER") or None,
+    'JWK_URL': os.getenv("JWT_JWK_URL") or None,
     'LEEWAY': 0,
-    "TOKEN_OBTAIN_SERIALIZER": "mainapps.accounts.api.serializers.MyTokenObtainPairSerializer",
+    "TOKEN_OBTAIN_SERIALIZER": "mainapps.accounts.serializers.MyTokenObtainPairSerializer",
 
     'AUTH_HEADER_TYPES': ('Bearer',),
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
@@ -219,24 +309,32 @@ SIMPLE_JWT = {
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
-AUTH_COOKIE='access'
+AUTH_COOKIE='accessToken'
+AUTH_REFRESH_COOKIE='refreshToken'
 AUTH_COOKIE_ACCESS_MAX_AGE=60*10
 AUTH_COOKIE_REFRESH_MAX_AGE=60*60*24
-AUTH_COOKIE_SECURE=False 
+AUTH_COOKIE_SECURE=os.getenv('AUTH_COOKIE_SECURE', 'True')=='True'
 AUTH_COOKIE_HTTP_ONLY=True
 AUTH_COOKIE_PATH='/'
-AUTH_COOKIE_SAMESITE='None'
+AUTH_COOKIE_SAMESITE=os.getenv('AUTH_COOKIE_SAMESITE', 'Lax')
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'mainapps.accounts.authentication.AccountJWTAuthentication',
         # 'rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication',
-    )
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': os.getenv('ANON_RATE_LIMIT', '20/minute'),
+        'user': os.getenv('USER_RATE_LIMIT', '120/minute'),
+    },
 }
 
-CORS_ALLOW_ALL_ORIGINS=True
-CORS_ORIGIN_ALLOW_ALL=True
+CORS_ALLOW_ALL_ORIGINS=os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False')=='True'
+CORS_ORIGIN_ALLOW_ALL=CORS_ALLOW_ALL_ORIGINS
 
-CORS_ALLOW_CREDENTIALS=True
+CORS_ALLOW_CREDENTIALS=os.getenv('CORS_ALLOW_CREDENTIALS', 'True')=='True'
 CORS_ALLOW_METHODS = (
     "DELETE",
     "GET",
@@ -276,13 +374,16 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 
-# SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False')=='True'
 
-SECURE_PROXY_SSL_HEADER=None
-SESSION_COOKIE_SECURE = False
+SECURE_PROXY_SSL_HEADER = (
+    ('HTTP_X_FORWARDED_PROTO', 'https')
+    if os.getenv('SECURE_PROXY_SSL_HEADER_ENABLED', 'False') == 'True'
+    else None
+)
+SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', 'True')=='True'
 
-CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', 'False')=='True'
+CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', 'True')=='True'
 FILE_UPLOAD_TIMEOUT = 3600
 DATA_UPLOAD_MAX_MEMORY_SIZE = 2147483648  # 2GB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 2147483648  # 2GB
@@ -299,10 +400,34 @@ CACHES = {
 }
 """
 
+# S3 Configuration
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
+AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME')
+AWS_STATIC_LOCATION = os.getenv('AWS_STATIC_LOCATION', 'assessment/static')
+AWS_S3_CUSTOM_DOMAIN = "%s.s3.amazonaws.com" % AWS_STORAGE_BUCKET_NAME
+AWS_S3_CONNECT_TIMEOUT = 10  
+AWS_S3_TIMEOUT = 60 
+AWS_S3_FILE_OVERWRITE = True
+
+
+if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_STORAGE_BUCKET_NAME:
+
+    STORAGES = {
+        "default": {"BACKEND": "storages.backends.s3boto3.S3Boto3Storage"},
+        "staticfiles": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+            "OPTIONS": {"location": AWS_STATIC_LOCATION},
+        },
+    }
+    STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_STATIC_LOCATION}/"
+
+
 CELERY_BROKER_URL = 'redis://redis:6379/0'
 CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
 USE_L10N = True
 USE_THOUSAND_SEPARATOR = True
 
-# SERVICES
-COMMON_SERVICE_URL=os.getenv('COMMON_SERVICE_URL')
+# INTER SERVICE COMMUNICATION
+KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')

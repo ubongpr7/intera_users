@@ -21,6 +21,25 @@ cp .env.example .env
 docker-compose up -d
 ```
 
+## JWT (RS256) setup
+
+The API now expects RS/ES key-based JWT signing (default: `RS256`).
+
+Generate keys:
+
+```bash
+openssl genrsa -out jwt_private.pem 2048
+openssl rsa -in jwt_private.pem -pubout -out jwt_public.pem
+```
+
+Set env vars:
+
+```env
+JWT_ALGORITHM=RS256
+JWT_PRIVATE_KEY_PATH=/absolute/path/jwt_private.pem
+JWT_PUBLIC_KEY_PATH=/absolute/path/jwt_public.pem
+```
+
 ## Documentation
 - [API Documentation](/docs/api.md)
 - [Architecture Overview](/docs/architecture.md)

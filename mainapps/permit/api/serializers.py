@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from mainapps.accounts.models import User
-from mainapps.management.models import StaffGroup, StaffRole, StaffRoleAssignment
+from mainapps.profile.models import StaffGroup, StaffRole, StaffRoleAssignment
 from mainapps.permit.models import CustomUserPermission
 
 class PermissionDetailSerializer(serializers.ModelSerializer):

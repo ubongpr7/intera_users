@@ -3,6 +3,7 @@ from django.utils.translation import gettext_lazy as _
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from datetime import datetime
 
 
 from mptt.models import MPTTModel, TreeForeignKey
@@ -14,8 +15,6 @@ from django.core.validators import RegexValidator
 from django.core.exceptions import ValidationError
 
 class Address(models.Model):
-
-    
     country = models.CharField(
         max_length=255,
         verbose_name=_('Country'),
@@ -79,13 +78,16 @@ class Address(models.Model):
         null=True,
         blank=True
     )
+    class Meta:
+        abstract = True
+
 
     def __str__(self):
         return f'{self.street}, {self.city}, {self.region}, {self.country}'
 
 def attachment_upload_path(instance, filename):
-    return f'attachments/{instance.attachment.content_type.model}/{instance.attachment.object_id}/{instance.attachment.id}/{instance.id}/{filename}'
-
+    timestamp = datetime.now().strftime("%y%m%d%H%M%S")
+    return f"attachments/{instance.attachment.content_type.model}/{instance.attachment.object_id}/{timestamp}-{filename}"
 class Attachment(models.Model):
     FILE_TYPES = (
         ('IMAGE', 'Image'),
