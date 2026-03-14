@@ -594,6 +594,7 @@ class LLMProviderChoices(models.TextChoices):
 
 class LLMModel(models.Model):
     provider = models.CharField(max_length=255, choices=LLMProviderChoices.choices)
+    base_url = models.CharField(max_length=500, blank=True, null=True)
 
 class ModelVersion(models.Model):
     llm = models.ForeignKey(LLMModel, on_delete=models.CASCADE)
@@ -646,6 +647,7 @@ class ProfileAgent(models.Model):
     name= models.CharField(max_length=255,)
     api_key= models.CharField(max_length=1000,)
     tavily_api_key = models.CharField(max_length=1000,)
+    base_url = models.CharField(max_length=500, blank=True, null=True)
     version = models.ForeignKey(ModelVersion,on_delete=models.CASCADE)
     special_instruction = models.TextField(blank=True)
     system_instruction = models.TextField(blank=True)
@@ -664,6 +666,14 @@ class ProfileAgent(models.Model):
     @property
     def model_name(self):
         return self.version.model_name
+
+    @property
+    def effective_base_url(self):
+        override = (self.base_url or "").strip()
+        if override:
+            return override
+        provider_default = getattr(self.version.llm, "base_url", None)
+        return (provider_default or "").strip()
 
     @property
     def decrypted_api_key(self):

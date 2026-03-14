@@ -9,6 +9,9 @@ class Command(BaseCommand):
         llm_data = {
             LLMProviderChoices.gpt: [
                 {
+                    'base_url': 'https://api.openai.com',
+                },
+                {
                     'model_name': 'gpt-5.4',
                     'versions': ['gpt-5.4', 'gpt-5.4-pro'],
                 },
@@ -23,6 +26,9 @@ class Command(BaseCommand):
             ],
             LLMProviderChoices.gemini: [
                 {
+                    'base_url': '',
+                },
+                {
                     'model_name': 'gemini-3',
                     'versions': ['gemini-3-pro-preview', 'gemini-3-flash-preview'],
                 },
@@ -32,6 +38,9 @@ class Command(BaseCommand):
                 },
             ],
             LLMProviderChoices.grok: [
+                {
+                    'base_url': 'https://api.x.ai',
+                },
                 {
                     'model_name': 'grok-4',
                     'versions': [
@@ -48,15 +57,25 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS('Starting population of LLM models and versions...'))
 
         for provider, models in llm_data.items():
+            provider_base_url = ''
+            if models and 'base_url' in models[0]:
+                provider_base_url = models[0].get('base_url') or ''
+                models = models[1:]
+
             # Check if the provider already exists in LLMModel
             llm_model, created = LLMModel.objects.get_or_create(
                 provider=provider,
-                defaults={'provider': provider}
+                defaults={'provider': provider, 'base_url': provider_base_url}
             )
             if created:
                 self.stdout.write(self.style.SUCCESS(f'Created LLMModel: {provider}'))
             else:
-                self.stdout.write(f'LLMModel {provider} already exists, skipping creation.')
+                if (llm_model.base_url or '') != provider_base_url:
+                    llm_model.base_url = provider_base_url
+                    llm_model.save(update_fields=['base_url'])
+                    self.stdout.write(self.style.SUCCESS(f'Updated LLMModel base URL for: {provider}'))
+                else:
+                    self.stdout.write(f'LLMModel {provider} already exists, skipping creation.')
 
             # Create ModelVersion instances for each model and version
             for model_data in models:

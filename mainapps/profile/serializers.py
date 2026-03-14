@@ -237,21 +237,25 @@ def _mask_secret(value: str) -> str:
 class ModelVersionOptionSerializer(serializers.ModelSerializer):
     provider = serializers.CharField(source="llm.provider", read_only=True)
     provider_label = serializers.CharField(source="llm.get_provider_display", read_only=True)
+    base_url = serializers.CharField(source="llm.base_url", read_only=True, allow_null=True)
 
     class Meta:
         model = ModelVersion
-        fields = ["id", "provider", "provider_label", "model_name"]
+        fields = ["id", "provider", "provider_label", "model_name", "base_url"]
 
 
 class ProfileAgentSetupSerializer(serializers.ModelSerializer):
     provider = serializers.CharField(source="version.llm.provider", read_only=True)
     provider_label = serializers.CharField(source="version.llm.get_provider_display", read_only=True)
     model_name = serializers.CharField(source="version.model_name", read_only=True)
+    provider_base_url = serializers.CharField(source="version.llm.base_url", read_only=True, allow_null=True)
+    effective_base_url = serializers.SerializerMethodField()
     version = serializers.PrimaryKeyRelatedField(queryset=ModelVersion.objects.select_related("llm").all())
     has_api_key = serializers.SerializerMethodField()
     has_tavily_api_key = serializers.SerializerMethodField()
     api_key_masked = serializers.SerializerMethodField()
     tavily_api_key_masked = serializers.SerializerMethodField()
+    base_url = serializers.CharField(required=False, allow_blank=True, allow_null=True, trim_whitespace=True)
     api_key = serializers.CharField(write_only=True, required=False, allow_blank=False, trim_whitespace=True)
     tavily_api_key = serializers.CharField(write_only=True, required=False, allow_blank=False, trim_whitespace=True)
 
@@ -265,6 +269,9 @@ class ProfileAgentSetupSerializer(serializers.ModelSerializer):
             "provider",
             "provider_label",
             "model_name",
+            "provider_base_url",
+            "effective_base_url",
+            "base_url",
             "special_instruction",
             "system_instruction",
             "assistant_instruction",
@@ -281,6 +288,8 @@ class ProfileAgentSetupSerializer(serializers.ModelSerializer):
             "provider",
             "provider_label",
             "model_name",
+            "provider_base_url",
+            "effective_base_url",
             "has_api_key",
             "has_tavily_api_key",
             "api_key_masked",
@@ -301,6 +310,9 @@ class ProfileAgentSetupSerializer(serializers.ModelSerializer):
 
     def get_has_api_key(self, obj):
         return bool(obj.decrypted_api_key)
+
+    def get_effective_base_url(self, obj):
+        return obj.effective_base_url or None
 
     def get_has_tavily_api_key(self, obj):
         return bool(obj.decrypted_tavily_api_key)

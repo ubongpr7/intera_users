@@ -177,6 +177,9 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             "model": agent.model_name,
         }
 
+        if agent.effective_base_url:
+            llm_claim["baseUrl"] = agent.effective_base_url
+
         if agent.api_key:
             llm_claim["apiKey"] = {"ciphertext": agent.api_key, "alg": "fernet"}
 
