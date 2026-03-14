@@ -14,6 +14,13 @@ LOCAL_SERVER = os.getenv('LOCAL_SERVER', 'False')=='True'
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _split_csv_env(var_name: str, default: list[str]) -> list[str]:
+    value = os.getenv(var_name, "").strip()
+    if not value:
+        return default
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 SECRET_KEY = os.getenv('SECRET_KEY')
 
 if not SECRET_KEY:
@@ -68,16 +75,12 @@ LOGGING = {
 _default_allowed_hosts = [
     'localhost',
     '127.0.0.1',
+    'accounts.interaims.com',
     'dev.accounts.interaims.com',
     'host.docker.internal'
     
 ]
-_allowed_hosts_env = os.getenv("ALLOWED_HOSTS", "").strip()
-ALLOWED_HOSTS = (
-    [host.strip() for host in _allowed_hosts_env.split(",") if host.strip()]
-    if _allowed_hosts_env
-    else _default_allowed_hosts
-)
+ALLOWED_HOSTS = _split_csv_env("ALLOWED_HOSTS", _default_allowed_hosts)
 # ALLOWED_HOSTS = ['*']
 
 # Application definition
@@ -357,7 +360,7 @@ CORS_ALLOW_HEADERS = [
     'X-profile-id',  
 ]
 
-CORS_ALLOWED_ORIGINS = [
+_default_cors_allowed_origins = [
     "http://localhost:3000",
     "http://localhost:8001",
     "http://127.0.0.1:3000",
@@ -368,10 +371,19 @@ CORS_ALLOWED_ORIGINS = [
     'https://dev.product.interaims.com',
     'https://dev.inventory.interaims.com',
     'https://dev.pos.interaims.com',
+    'https://accounts.interaims.com',
+    'https://dev.accounts.interaims.com',
     'https://www.interaims.com',
     'https://interaims.com',
 
 ]
+CORS_ALLOWED_ORIGINS = _split_csv_env("CORS_ALLOWED_ORIGINS", _default_cors_allowed_origins)
+
+_default_csrf_trusted_origins = sorted(set(CORS_ALLOWED_ORIGINS + [
+    "https://accounts.interaims.com",
+    "https://dev.accounts.interaims.com",
+]))
+CSRF_TRUSTED_ORIGINS = _split_csv_env("CSRF_TRUSTED_ORIGINS", _default_csrf_trusted_origins)
 
 
 SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False')=='True'

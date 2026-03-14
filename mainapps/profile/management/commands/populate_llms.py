@@ -8,15 +8,40 @@ class Command(BaseCommand):
         # Define the provider and model version mapping
         llm_data = {
             LLMProviderChoices.gpt: [
-                {'model_name': 'gpt-4', 'versions': ['gpt-4-turbo', 'gpt-4o']},
-                {'model_name': 'gpt-3.5', 'versions': ['gpt-3.5-turbo']},
+                {
+                    'model_name': 'gpt-5.4',
+                    'versions': ['gpt-5.4', 'gpt-5.4-pro'],
+                },
+                {
+                    'model_name': 'gpt-5',
+                    'versions': ['gpt-5', 'gpt-5-pro', 'gpt-5-mini', 'gpt-5-nano'],
+                },
+                {
+                    'model_name': 'gpt-codex',
+                    'versions': ['gpt-5-codex', 'gpt-5.3-codex'],
+                },
             ],
             LLMProviderChoices.gemini: [
-                {'model_name': 'gemini-1.5', 'versions': ['gemini-1.5-flash', 'gemini-1.5-pro']},
-                {'model_name': 'gemini-1.0', 'versions': ['gemini-1.0-pro']},
+                {
+                    'model_name': 'gemini-3',
+                    'versions': ['gemini-3-pro-preview', 'gemini-3-flash-preview'],
+                },
+                {
+                    'model_name': 'gemini-2.5',
+                    'versions': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+                },
             ],
             LLMProviderChoices.grok: [
-                {'model_name': 'grok-3', 'versions': ['grok-3-base']},
+                {
+                    'model_name': 'grok-4',
+                    'versions': [
+                        'grok-4',
+                        'grok-4-fast-reasoning',
+                        'grok-4-fast-non-reasoning',
+                        'grok-4-1-fast-reasoning',
+                        'grok-code-fast-1',
+                    ],
+                },
             ],
         }
 
@@ -35,7 +60,6 @@ class Command(BaseCommand):
 
             # Create ModelVersion instances for each model and version
             for model_data in models:
-                model_name = model_data['model_name']
                 for version_name in model_data['versions']:
                     model_version, created = ModelVersion.objects.get_or_create(
                         llm=llm_model,
