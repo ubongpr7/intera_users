@@ -30,10 +30,6 @@ def _profile_from_request(request):
     if not token_profile_id:
         raise PermissionDenied("No active company context. Switch company before accessing this resource.")
 
-    requested_profile_id = request.headers.get("X-Profile-ID")
-    if requested_profile_id and str(token_profile_id) != str(requested_profile_id):
-        raise PermissionDenied("X-Profile-ID does not match token profile context.")
-
     profile = get_company_or_profile(request.user, profile_id=token_profile_id)
     if not profile:
         raise PermissionDenied("Profile context is not accessible for this user.")

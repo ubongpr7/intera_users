@@ -255,7 +255,6 @@ class ProfileAgentSetupSerializer(serializers.ModelSerializer):
     has_tavily_api_key = serializers.SerializerMethodField()
     api_key_masked = serializers.SerializerMethodField()
     tavily_api_key_masked = serializers.SerializerMethodField()
-    base_url = serializers.CharField(required=False, allow_blank=True, allow_null=True, trim_whitespace=True)
     api_key = serializers.CharField(write_only=True, required=False, allow_blank=False, trim_whitespace=True)
     tavily_api_key = serializers.CharField(write_only=True, required=False, allow_blank=False, trim_whitespace=True)
 
@@ -271,7 +270,6 @@ class ProfileAgentSetupSerializer(serializers.ModelSerializer):
             "model_name",
             "provider_base_url",
             "effective_base_url",
-            "base_url",
             "special_instruction",
             "system_instruction",
             "assistant_instruction",
