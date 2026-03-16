@@ -73,7 +73,7 @@ class UsersMcpSerializationTests(SimpleTestCase):
         setattr(profile, "active_role_count", 2)
         setattr(profile, "active_group_count", 1)
         setattr(profile, "active_memberships_for_mcp", [])
-        setattr(profile, "agent", object())
+        profile._state.fields_cache["agent"] = object()
 
         payload = _company_profile_payload(profile, principal_user_id=owner.id)
 

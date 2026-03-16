@@ -45,6 +45,68 @@ JWT_PUBLIC_KEY_PATH=/absolute/path/jwt_public.pem
 - [Architecture Overview](/docs/architecture.md)
 - [Development Guide](/docs/development.md)
 
+## MCP server
+
+This repo now includes a User Service MCP server at `mcp_server.server`.
+
+Current tools:
+
+- `list_accessible_company_profiles`: list workspaces the authenticated caller can access
+- `get_active_company_profile`: return the active workspace resolved from the caller's `profile_id` claim
+- `search_company_staff`: search staff in the caller's active workspace
+
+Transport:
+
+- Streamable HTTP endpoint: `/mcp`
+- Health endpoint: `/health`
+
+Local Docker Compose service:
+
+- Service name: `users_mcp`
+- Container name: `users-mcp`
+- Host port: `7010`
+
+Run locally:
+
+```bash
+docker compose up users_mcp
+```
+
+Direct local run:
+
+```bash
+uv run python -m mcp_server.server
+```
+
+Relevant environment variables:
+
+- `USERS_MCP_HOST` default `0.0.0.0`
+- `USERS_MCP_PORT` default `8000`
+- `USERS_MCP_MOUNT_PATH` default `/mcp`
+- `USERS_MCP_LOG_LEVEL` default `info`
+- `USERS_MCP_ALLOWED_HOSTS` optional comma-separated Host allowlist for FastMCP transport security
+- `USERS_MCP_ALLOWED_ORIGINS` optional comma-separated Origin allowlist for FastMCP transport security
+
+Authentication:
+
+- The MCP server expects the same Bearer access token issued by `intera_users`.
+- Authenticated tools require `user_id` and `profile_id` claims.
+
+Recommended K-A2A config for this MCP server:
+
+```json
+{
+  "id": "users",
+  "serverUrl": "http://users-mcp:8000/mcp/",
+  "auth": { "mode": "forward_bearer" },
+  "tools": [
+    "list_accessible_company_profiles",
+    "get_active_company_profile",
+    "search_company_staff"
+  ]
+}
+```
+
 ## Technology Stack
 - **Backend**: Django, Django REST Framework
 - **Database**: PostgreSQL
