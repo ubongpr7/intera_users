@@ -233,8 +233,12 @@ class CompanyProfile(models.Model):
 
     def get_staff_roles(self):
         return StaffRole.objects.filter(profile=self)
-    def staff_groups(self):
+
+    def get_staff_groups(self):
         return StaffGroup.objects.filter(profile=self)
+
+    def staff_groups(self):
+        return self.get_staff_groups()
 
     def get_membership_for_user(self, user):
         return self.memberships.filter(user=user, is_active=True).first()

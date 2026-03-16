@@ -222,13 +222,13 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def roles(self, request, pk=None):
         profile = self.get_object()
-        serializer = StaffRoleSerializer(profile.staff_roles.all(), many=True)
+        serializer = StaffRoleSerializer(profile.get_staff_roles(), many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=["get"])
     def groups(self, request, pk=None):
         profile = self.get_object()
-        serializer = StaffGroupSerializer(profile.staff_groups.all(), many=True)
+        serializer = StaffGroupSerializer(profile.get_staff_groups(), many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=["get"])
@@ -268,8 +268,8 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             profile=profile,
             is_active=True,
         ).count()
-        active_roles = profile.staff_roles.filter(is_active=True).count()
-        active_groups = profile.staff_groups.filter(is_active=True).count()
+        active_roles = profile.get_staff_roles().filter(is_active=True).count()
+        active_groups = profile.get_staff_groups().filter(is_active=True).count()
         total_policies = (
             profile.recall_policies.count()
             + profile.reorder_strategies.count()

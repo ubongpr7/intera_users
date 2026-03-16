@@ -80,7 +80,7 @@ class CompanyProfileDetailSerializer(serializers.ModelSerializer):
         return obj.get_staff_roles().count()
     
     def get_groups_count(self, obj):
-        return obj.staff_groups().count()   
+        return obj.get_staff_groups().count()
 
 class StaffRoleListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for staff role lists"""
