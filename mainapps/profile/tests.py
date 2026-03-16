@@ -1,10 +1,15 @@
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
+
 from http import HTTPStatus
 
 from django.test import SimpleTestCase, TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from mainapps.accounts.models import User
-from mainapps.profile.models import LLMModel, LLMProviderChoices, ModelVersion, ProfileAgent
+from mainapps.profile.models import CompanyInvitation, LLMModel, LLMProviderChoices, ModelVersion, ProfileAgent
 from mainapps.profile.models import CompanyProfile, StaffGroup, StaffRole, StaffRoleAssignment
 
 
@@ -31,12 +36,12 @@ class CompanyProfileActionTests(TestCase):
             email="admin@example.com",
             password="password123",
         )
-        self.client.force_authenticate(user=self.user)
-
         self.profile = CompanyProfile.objects.create(
             owner=self.user,
             name="Acme Health",
         )
+        self.auth_token = SimpleNamespace(payload={"profile_id": self.profile.id})
+        self.client.force_authenticate(user=self.user, token=self.auth_token)
         self.active_role = StaffRole.objects.create(
             profile=self.profile,
             name="Pharmacist",
@@ -103,3 +108,73 @@ class CompanyProfileActionTests(TestCase):
                 "profile_age_days": 0,
             },
         )
+
+
+class CompanyInvitationActionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_superuser(
+            email="owner@example.com",
+            password="password123",
+        )
+        self.profile = CompanyProfile.objects.create(
+            owner=self.user,
+            name="Acme Health",
+        )
+        self.auth_token = SimpleNamespace(payload={"profile_id": self.profile.id})
+        self.client.force_authenticate(user=self.user, token=self.auth_token)
+
+    @patch("mainapps.profile.views.send_html_email")
+    def test_invite_sends_company_invitation_email(self, send_html_email_mock):
+        response = self.client.post(
+            "/management/invitations/invite/",
+            {"email": "invitee@example.com", "role": "member"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, HTTPStatus.CREATED)
+        invitation = CompanyInvitation.objects.get(email="invitee@example.com")
+        self.assertEqual(invitation.profile, self.profile)
+        send_html_email_mock.assert_called_once()
+        self.assertEqual(send_html_email_mock.call_args.kwargs["to_email"], ["invitee@example.com"])
+        self.assertEqual(
+            send_html_email_mock.call_args.kwargs["html_file"],
+            "emails/company_invitation.html",
+        )
+
+    @patch("mainapps.profile.views.send_html_email")
+    def test_invite_resends_existing_pending_invitation_email(self, send_html_email_mock):
+        CompanyInvitation.objects.create(
+            profile=self.profile,
+            email="invitee@example.com",
+            role="member",
+            invited_by=self.user,
+            expires_at=timezone.now() + timedelta(days=1),
+        )
+
+        response = self.client.post(
+            "/management/invitations/invite/",
+            {"email": "invitee@example.com", "role": "member"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        self.assertEqual(CompanyInvitation.objects.filter(email="invitee@example.com").count(), 1)
+        send_html_email_mock.assert_called_once()
+
+    @patch("mainapps.profile.views.send_html_email")
+    def test_resend_action_sends_invitation_email(self, send_html_email_mock):
+        invitation = CompanyInvitation.objects.create(
+            profile=self.profile,
+            email="invitee@example.com",
+            role="member",
+            invited_by=self.user,
+            expires_at=timezone.now() - timedelta(hours=1),
+        )
+
+        response = self.client.post(f"/management/invitations/{invitation.id}/resend/")
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, CompanyInvitation.InvitationStatus.PENDING)
+        send_html_email_mock.assert_called_once()

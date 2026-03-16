@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f7fb;
+            margin: 0;
+            padding: 24px;
+            color: #1f2937;
+        }
+        .card {
+            max-width: 560px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            padding: 32px;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+        }
+        .eyebrow {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #2563eb;
+            margin-bottom: 12px;
+        }
+        h1 {
+            font-size: 28px;
+            margin: 0 0 16px;
+            color: #111827;
+        }
+        p {
+            line-height: 1.6;
+            margin: 0 0 16px;
+        }
+        .code-box {
+            margin: 24px 0;
+            padding: 16px;
+            border-radius: 10px;
+            background-color: #eff6ff;
+            border: 1px solid #bfdbfe;
+        }
+        .code-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #2563eb;
+            margin-bottom: 8px;
+        }
+        .code {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            word-break: break-all;
+        }
+        .cta {
+            display: inline-block;
+            margin: 8px 0 20px;
+            padding: 12px 18px;
+            border-radius: 8px;
+            background-color: #2563eb;
+            color: #ffffff !important;
+            text-decoration: none;
+            font-weight: 700;
+        }
+        .meta {
+            font-size: 14px;
+            color: #4b5563;
+        }
+        .footer {
+            margin-top: 24px;
+            font-size: 13px;
+            color: #6b7280;
+        }
+        .mono {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="eyebrow">Company Invitation</div>
+        <h1>Join {{ company_name }}</h1>
+        <p><strong>{{ invited_by_email }}</strong> invited you to join <strong>{{ company_name }}</strong> as <strong>{{ role_label }}</strong>.</p>
+
+        {% if invitation_message %}
+        <p>{{ invitation_message }}</p>
+        {% endif %}
+
+        {% if accept_url %}
+        <p><a class="cta" href="{{ accept_url }}">Review invitation</a></p>
+        {% endif %}
+
+        <div class="code-box">
+            <div class="code-label">Invitation code</div>
+            <div class="code">{{ invitation_code }}</div>
+        </div>
+
+        <p class="meta">Sign in with <strong>{{ recipient_email }}</strong> to accept or decline this invite.</p>
+        <p class="meta">The invitation expires on {{ expires_at|date:"M j, Y g:i A T" }}.</p>
+
+        <div class="footer">
+            <p>If your app does not open an invitation page automatically, send this code to the API after signing in:</p>
+            <p class="mono">POST {{ accept_endpoint }}</p>
+            <p class="mono">POST {{ decline_endpoint }}</p>
+        </div>
+    </div>
+</body>
+</html>

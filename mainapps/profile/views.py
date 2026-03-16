@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db.models import Q
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -18,6 +19,7 @@ from rest_framework.views import APIView
 from mainapps.accounts.api.serializers import MyUserSerializer
 from mainapps.common.settings import get_company_or_profile
 from mainapps.permit.permit import HasModelRequestPermission, PermissionRequiredMixin
+from subapps.email_system.emails import send_html_email
 
 from .models import (
     CompanyMembership,
@@ -428,6 +430,42 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             return None
         return email
 
+    @staticmethod
+    def _build_invitation_accept_url(invitation):
+        template = getattr(settings, "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
+        if not template:
+            return ""
+        try:
+            return template.format(code=invitation.invitation_code)
+        except (IndexError, KeyError, ValueError):
+            return template
+
+    def _send_invitation_email(self, request, invitation):
+        inviter_email = invitation.invited_by.email if invitation.invited_by_id else "an administrator"
+        subject = f"Invitation to join {invitation.profile.name}"
+        message = (
+            invitation.invitation_message.strip()
+            or f"{inviter_email} invited you to join {invitation.profile.name}."
+        )
+        send_html_email(
+            subject=subject,
+            message=message,
+            to_email=[invitation.email],
+            html_file="emails/company_invitation.html",
+            context={
+                "company_name": invitation.profile.name,
+                "invited_by_email": inviter_email,
+                "invitation_code": invitation.invitation_code,
+                "invitation_message": invitation.invitation_message.strip(),
+                "role_label": invitation.get_role_display(),
+                "expires_at": invitation.expires_at,
+                "accept_url": self._build_invitation_accept_url(invitation),
+                "accept_endpoint": request.build_absolute_uri(reverse("company-invitation-accept")),
+                "decline_endpoint": request.build_absolute_uri(reverse("company-invitation-decline")),
+                "recipient_email": invitation.email,
+            },
+        )
+
     @action(detail=False, methods=["post"], url_path="invite")
     def invite(self, request):
         profile = _profile_from_request(request)
@@ -466,9 +504,10 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             status=CompanyInvitation.InvitationStatus.PENDING,
         ).first()
         if existing_pending and existing_pending.expires_at > timezone.now():
+            self._send_invitation_email(request, existing_pending)
             return Response(self.get_serializer(existing_pending).data, status=status.HTTP_200_OK)
 
-        expires_days = int(getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2))
+        expires_days = getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2)
         invitation = CompanyInvitation.objects.create(
             profile=profile,
             email=email,
@@ -477,6 +516,7 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             invitation_message=invitation_message,
             expires_at=timezone.now() + timedelta(days=expires_days),
         )
+        self._send_invitation_email(request, invitation)
         return Response(self.get_serializer(invitation).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"], url_path="invite-bulk")
@@ -532,7 +572,7 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             )
 
         now = timezone.now()
-        expires_days = int(getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2))
+        expires_days = getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2)
         seen = set()
         created_invites = []
         existing_pending = []
@@ -564,6 +604,7 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             ).first()
             if existing and existing.expires_at > now:
                 existing_pending.append(existing)
+                self._send_invitation_email(request, existing)
                 continue
 
             invitation = CompanyInvitation.objects.create(
@@ -575,6 +616,7 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 expires_at=now + timedelta(days=expires_days),
             )
             created_invites.append(invitation)
+            self._send_invitation_email(request, invitation)
 
         return Response(
             {
@@ -615,10 +657,11 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(request)
         if not profile or profile.id != invitation.profile_id:
             raise PermissionDenied("Invitation does not belong to your active profile.")
-        expires_days = int(getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2))
+        expires_days = getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2)
         invitation.status = CompanyInvitation.InvitationStatus.PENDING
         invitation.expires_at = timezone.now() + timedelta(days=expires_days)
         invitation.save(update_fields=["status", "expires_at", "updated_at"])
+        self._send_invitation_email(request, invitation)
         return Response(self.get_serializer(invitation).data)
 
     @action(detail=True, methods=["post"], url_path="revoke")
