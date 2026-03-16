@@ -49,6 +49,7 @@ from .serializers import (
     ProfileAgentSetupSerializer,
     RecallPolicySerializer,
     ReorderStrategySerializer,
+    CompanyMembershipStaffSerializer,
     StaffAssignmentSerializer,
     StaffGroupListSerializer,
     StaffGroupSerializer,
@@ -129,16 +130,14 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def staff_active_assignments(self, request, pk=None):
         profile = self.get_object()
-        staff_assignments = (
-            StaffRoleAssignment.objects.filter(
+        staff_memberships = (
+            CompanyMembership.objects.filter(
                 profile=profile,
                 is_active=True,
-                start_date__lte=timezone.now(),
             )
-            .filter(Q(end_date__isnull=True) | Q(end_date__gte=timezone.now()))
-            .select_related("user", "role")
+            .select_related("user", "profile")
         )
-        serializer = StaffAssignmentSerializer(staff_assignments, many=True)
+        serializer = CompanyMembershipStaffSerializer(staff_memberships, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
@@ -267,7 +266,7 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def analytics(self, request, pk=None):
         profile = self.get_object()
-        total_staff = StaffRoleAssignment.objects.filter(
+        total_staff = CompanyMembership.objects.filter(
             profile=profile,
             is_active=True,
         ).count()

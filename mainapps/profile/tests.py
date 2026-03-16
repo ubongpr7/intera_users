@@ -9,7 +9,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from mainapps.accounts.models import User
-from mainapps.profile.models import CompanyInvitation, LLMModel, LLMProviderChoices, ModelVersion, ProfileAgent
+from mainapps.profile.models import CompanyInvitation, CompanyMembership, LLMModel, LLMProviderChoices, ModelVersion, ProfileAgent
 from mainapps.profile.models import CompanyProfile, StaffGroup, StaffRole, StaffRoleAssignment
 
 
@@ -108,6 +108,28 @@ class CompanyProfileActionTests(TestCase):
                 "profile_age_days": 0,
             },
         )
+
+    def test_staff_active_assignments_returns_active_company_memberships(self):
+        invited_user = User.objects.create_user(
+            email="staff@example.com",
+            password="password123",
+            first_name="Ada",
+        )
+        CompanyMembership.objects.create(
+            user=invited_user,
+            profile=self.profile,
+            role=CompanyMembership.MembershipRole.MEMBER,
+            is_active=True,
+            invited_by=self.user,
+        )
+
+        response = self.client.get(f"/management/profiles/{self.profile.id}/staff_active_assignments/")
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        payload = response.json()
+        returned_emails = {item["user"]["email"] for item in payload}
+        self.assertIn(self.user.email, returned_emails)
+        self.assertIn(invited_user.email, returned_emails)
 
 
 class CompanyInvitationActionTests(TestCase):

@@ -6,6 +6,7 @@ from cities_light.models import City, Country, Region, SubRegion
 from mainapps.accounts.api.serializers import MyUserSerializer
 from .models import (
     CompanyInvitation,
+    CompanyMembership,
     CompanyProfile, CompanyProfileAddress, StaffGroup, StaffRole, StaffRoleAssignment,
      RecallPolicy, ReorderStrategy, InventoryPolicy, ProfileAgent, ModelVersion
 )
@@ -165,6 +166,24 @@ class StaffAssignmentSerializer(serializers.ModelSerializer):
             obj.start_date <= now and
             (obj.end_date is None or obj.end_date >= now)
         )
+
+
+class CompanyMembershipStaffSerializer(serializers.ModelSerializer):
+    user = MyUserSerializer(read_only=True)
+    membership_role = serializers.CharField(source="role", read_only=True)
+
+    class Meta:
+        model = CompanyMembership
+        fields = [
+            "id",
+            "user",
+            "profile",
+            "membership_role",
+            "is_active",
+            "joined_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
 
 class AddStaffSerializer(serializers.Serializer):
     """Serializer for adding staff to profile"""
