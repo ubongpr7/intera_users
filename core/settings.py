@@ -384,6 +384,7 @@ _default_cors_allowed_origins = [
     'https://dev.accounts.interaims.com',
     'https://www.interaims.com',
     'https://interaims.com',
+    'https://dev.interaims.com'
 
 ]
 CORS_ALLOWED_ORIGINS = _split_csv_env("CORS_ALLOWED_ORIGINS", _default_cors_allowed_origins)
