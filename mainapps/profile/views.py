@@ -1,6 +1,7 @@
 import csv
 from datetime import timedelta
 from io import StringIO
+from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -434,7 +435,10 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     def _build_invitation_accept_url(invitation):
         template = getattr(settings, "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
         if not template:
-            return ""
+            frontend_site_url = getattr(settings, "FRONTEND_SITE_URL", "").strip().rstrip("/")
+            if not frontend_site_url:
+                return ""
+            return f"{frontend_site_url}/accounts/invitations/{quote(invitation.invitation_code, safe='')}"
         try:
             return template.format(code=invitation.invitation_code)
         except (IndexError, KeyError, ValueError):
@@ -460,8 +464,6 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 "role_label": invitation.get_role_display(),
                 "expires_at": invitation.expires_at,
                 "accept_url": self._build_invitation_accept_url(invitation),
-                "accept_endpoint": request.build_absolute_uri(reverse("company-invitation-accept")),
-                "decline_endpoint": request.build_absolute_uri(reverse("company-invitation-decline")),
                 "recipient_email": invitation.email,
             },
         )
