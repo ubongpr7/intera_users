@@ -2,6 +2,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
@@ -214,8 +215,11 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD =os.getenv('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "noreply@interaims.com")
 COMPANY_INVITATION_EXPIRY_DAYS = int(os.getenv("COMPANY_INVITATION_EXPIRY_DAYS", "2"))
-FRONTEND_SITE_URL = os.getenv("FRONTEND_SITE_URL", "").strip().rstrip("/")
+SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
 COMPANY_INVITATION_ACCEPT_URL_TEMPLATE = os.getenv("COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
+_frontend_site = urlparse(SITE_URL) if SITE_URL else None
+EMAIL_FRONTEND_PROTOCOL = (_frontend_site.scheme if _frontend_site and _frontend_site.scheme else "").strip() or None
+EMAIL_FRONTEND_DOMAIN = (_frontend_site.netloc if _frontend_site and _frontend_site.netloc else "").strip() or None
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
     
@@ -274,8 +278,8 @@ DJOSER = {
     'USER_CREATE_PASSWORD_RETYPE': True,
     'PASSWORD_RESET_CONFIRM_RETYPE': True,
     'LOGOUT_ON_PASSWORD_CHANGE': True,
-    # 'EMAIL_FRONTEND_DOMAIN':'localhost:3000',
-    # 'EMAIL_FRONTEND_PROTOCOL':'http',
+    'EMAIL_FRONTEND_DOMAIN': EMAIL_FRONTEND_DOMAIN,
+    'EMAIL_FRONTEND_PROTOCOL': EMAIL_FRONTEND_PROTOCOL,
     'TOKEN_MODEL': 'rest_framework.authtoken.models.Token',  
 
     'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': os.getenv('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', '').split(','),

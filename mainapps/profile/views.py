@@ -435,10 +435,10 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     def _build_invitation_accept_url(invitation):
         template = getattr(settings, "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
         if not template:
-            frontend_site_url = getattr(settings, "FRONTEND_SITE_URL", "").strip().rstrip("/")
-            if not frontend_site_url:
+            site_url = getattr(settings, "SITE_URL", "").strip().rstrip("/")
+            if not site_url:
                 return ""
-            return f"{frontend_site_url}/accounts/invitations/{quote(invitation.invitation_code, safe='')}"
+            return f"{site_url}/accounts/invitations/{quote(invitation.invitation_code, safe='')}"
         try:
             return template.format(code=invitation.invitation_code)
         except (IndexError, KeyError, ValueError):
