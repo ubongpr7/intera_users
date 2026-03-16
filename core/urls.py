@@ -36,9 +36,9 @@ urlpatterns = [
     path("schema/", Schema.as_view()),
 
     # db sync
-    # path('api/v1/accounts/', include("mainapps.accounts.api.urls")),
     path('permission_api/', include("mainapps.permit.api.urls",)),
     path('management/', include("mainapps.profile.urls")),
+    path('common/', include("mainapps.common.urls")),
     
 ]
 

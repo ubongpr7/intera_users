@@ -136,4 +136,40 @@ class Attachment(models.Model):
         return f"{self.get_file_type_display()} for {self.content_object}"
 
 
+class Unit(models.Model):
+    class DimensionType(models.TextChoices):
+        MASS = "MASS", _("Mass")
+        VOLUME = "VOLUME", _("Volume")
+        LENGTH = "LENGTH", _("Length")
+        PIECE = "PIECE", _("Piece")
+        TIME = "TIME", _("Time")
+        CUSTOM = "CUSTOM", _("Custom")
+
+    name = models.CharField(max_length=100)
+    abbreviated_name = models.CharField(max_length=20)
+    dimension_type = models.CharField(max_length=20, choices=DimensionType.choices)
+    base_unit = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="derived_units",
+    )
+    conversion_factor = models.FloatField(default=1.0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["dimension_type", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dimension_type", "name"],
+                name="common_unit_dimension_name_unique",
+            )
+        ]
+        verbose_name = _("Unit")
+        verbose_name_plural = _("Units")
+
+    def __str__(self):
+        return f"{self.name} ({self.dimension_type})"
+
 

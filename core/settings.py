@@ -97,6 +97,7 @@ THIRD_PARTY_APPS=[
      "rest_framework",
     "rest_framework.authtoken",
     'corsheaders',
+    'cities_light',
     'whitenoise.runserver_nostatic',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',

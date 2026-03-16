@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from cities_light.models import City, Country, Region, SubRegion
 
 from mainapps.accounts.api.serializers import MyUserSerializer
 from .models import (
@@ -13,15 +14,36 @@ User = get_user_model()
 
 class CompanyProfileAddressSerializer(serializers.ModelSerializer):
     """Serializer for addresses"""
-    country_name = serializers.CharField(source='country', read_only=True)
-    region_name = serializers.CharField(source='region', read_only=True)
-    subregion_name = serializers.CharField(source='subregion', read_only=True)
-    city_name = serializers.CharField(source='city', read_only=True)
+    country_name = serializers.SerializerMethodField()
+    region_name = serializers.SerializerMethodField()
+    subregion_name = serializers.SerializerMethodField()
+    city_name = serializers.SerializerMethodField()
     
     class Meta:
         model = CompanyProfileAddress
         fields = '__all__'
         read_only_fields = ['profile']
+
+    @staticmethod
+    def _resolve_geo_name(model_class, raw_value):
+        if raw_value in (None, ""):
+            return None
+        try:
+            return model_class.objects.only("name").get(id=int(raw_value)).name
+        except (TypeError, ValueError, model_class.DoesNotExist):
+            return raw_value
+
+    def get_country_name(self, obj):
+        return self._resolve_geo_name(Country, obj.country)
+
+    def get_region_name(self, obj):
+        return self._resolve_geo_name(Region, obj.region)
+
+    def get_subregion_name(self, obj):
+        return self._resolve_geo_name(SubRegion, obj.subregion)
+
+    def get_city_name(self, obj):
+        return self._resolve_geo_name(City, obj.city)
 
 class CompanyProfileListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for company profile lists"""
