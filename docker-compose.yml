@@ -61,7 +61,7 @@ services:
       - .:/app
       - venv:/app/.venv
     ports:
-      - "7010:8000"
+      - "7033:8000"
     depends_on:
       - web
     restart: unless-stopped
