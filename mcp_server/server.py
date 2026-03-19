@@ -18,6 +18,7 @@ if not apps.ready:
 from django.db.models import Count, Prefetch, Q
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from rest_framework.test import APIRequestFactory
 from rest_framework_simplejwt.tokens import UntypedToken
 from starlette.applications import Starlette
 from starlette.datastructures import Headers
@@ -27,7 +28,8 @@ from starlette.routing import Mount, Route
 import uvicorn
 
 from mainapps.accounts.models import User
-from mainapps.profile.models import CompanyMembership, CompanyProfile, StaffGroup, StaffRoleAssignment
+from mainapps.profile.models import CompanyInvitation, CompanyMembership, CompanyProfile, StaffGroup, StaffRoleAssignment
+from mainapps.profile.views import CompanyInvitationViewSet, CompanyProfileViewSet, StaffGroupViewSet, StaffRoleViewSet
 from subapps.utils.request_context import coerce_identity_id
 
 
@@ -220,6 +222,30 @@ def _staff_payload(user: User, *, active_profile_id: int) -> dict[str, Any]:
     }
 
 
+def _invitation_payload(invitation: CompanyInvitation) -> dict[str, Any]:
+    profile = getattr(invitation._state, "fields_cache", {}).get("profile")
+    invited_by = getattr(invitation._state, "fields_cache", {}).get("invited_by")
+    accepted_by = getattr(invitation._state, "fields_cache", {}).get("accepted_by")
+    return {
+        "id": str(invitation.id),
+        "invitation_code": invitation.invitation_code,
+        "email": invitation.email,
+        "role": invitation.role,
+        "status": invitation.status,
+        "profile_id": str(invitation.profile_id),
+        "profile_name": profile.name if profile is not None else "",
+        "company_code": profile.company_code if profile is not None else "",
+        "invited_by_user_id": str(invitation.invited_by_id) if invitation.invited_by_id else None,
+        "invited_by_email": invited_by.email if invited_by is not None else "",
+        "accepted_by_user_id": str(invitation.accepted_by_id) if invitation.accepted_by_id else None,
+        "accepted_by_email": accepted_by.email if accepted_by is not None else "",
+        "invitation_message": invitation.invitation_message or "",
+        "expires_at": invitation.expires_at.isoformat() if invitation.expires_at else None,
+        "responded_at": invitation.responded_at.isoformat() if invitation.responded_at else None,
+        "created_at": invitation.created_at.isoformat() if invitation.created_at else None,
+    }
+
+
 def _accessible_profile_queryset(*, principal: UsersMcpPrincipal):
     principal_user_id = coerce_identity_id(principal.user_id)
     return (
@@ -346,6 +372,304 @@ def _search_company_staff_sync(
     }
 
 
+def _list_pending_company_invitations_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    query: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    queryset = (
+        CompanyInvitation.objects.select_related("profile", "invited_by", "accepted_by")
+        .filter(profile_id=principal.profile_id, status=CompanyInvitation.InvitationStatus.PENDING)
+        .order_by("-created_at", "-id")
+    )
+    term = str(query or "").strip()
+    if term:
+        queryset = queryset.filter(
+            Q(email__icontains=term)
+            | Q(profile__name__icontains=term)
+            | Q(invitation_code__icontains=term)
+            | Q(invited_by__email__icontains=term)
+        )
+    invitations = list(queryset[:limit])
+    return {
+        "profile_id": principal.profile_id,
+        "query": term or None,
+        "count": len(invitations),
+        "results": [_invitation_payload(invitation) for invitation in invitations],
+    }
+
+
+def _list_my_company_invitations_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    status: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    queryset = (
+        CompanyInvitation.objects.select_related("profile", "invited_by", "accepted_by")
+        .filter(email__iexact=str(principal.claims.get("email") or "").strip())
+        .order_by("-created_at", "-id")
+    )
+    if status:
+        queryset = queryset.filter(status=status)
+    invitations = list(queryset[:limit])
+    return {
+        "profile_id": principal.profile_id,
+        "email": str(principal.claims.get("email") or "").strip() or None,
+        "status": status,
+        "count": len(invitations),
+        "results": [_invitation_payload(invitation) for invitation in invitations],
+    }
+
+
+def _get_company_invitation_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    invitation_code: str,
+) -> dict[str, Any]:
+    invitation = (
+        CompanyInvitation.objects.select_related("profile", "invited_by", "accepted_by")
+        .filter(invitation_code=invitation_code)
+        .first()
+    )
+    if invitation is None:
+        raise ValueError("Invitation not found.")
+    return {
+        "profile_id": principal.profile_id,
+        "invitation": _invitation_payload(invitation),
+    }
+
+
+def _resend_company_invitation_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    invitation_id: str,
+) -> dict[str, Any]:
+    factory = APIRequestFactory()
+    request = factory.post(
+        "/mcp/internal",
+        data={},
+        format="json",
+        HTTP_AUTHORIZATION=f"Bearer {principal.token}",
+    )
+    view = CompanyInvitationViewSet.as_view({"post": "resend"})
+    response = view(request, pk=invitation_id)
+    status_code = getattr(response, "status_code", 200)
+    payload = getattr(response, "data", None)
+    if status_code >= 400:
+        raise ValueError(str(payload or {"detail": "Request failed."}))
+    return {
+        "profile_id": principal.profile_id,
+        "result": payload,
+    }
+
+
+def _invoke_view_action_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    viewset_cls,
+    action: str,
+    method: str,
+    pk: str | None = None,
+    data: dict[str, Any] | None = None,
+    query_params: dict[str, Any] | None = None,
+) -> Any:
+    factory = APIRequestFactory()
+    http_method = method.lower().strip()
+    path = "/mcp/internal"
+    auth_header = f"Bearer {principal.token}"
+
+    if http_method == "get":
+        request = factory.get(path, data=query_params or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+    elif http_method == "post":
+        request = factory.post(path, data=data or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+    elif http_method == "patch":
+        request = factory.patch(path, data=data or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+    elif http_method == "put":
+        request = factory.put(path, data=data or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+    elif http_method == "delete":
+        request = factory.delete(path, data=data or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+    else:
+        raise ValueError(f"Unsupported method: {method}")
+
+    view = viewset_cls.as_view({http_method: action})
+    response = view(request, pk=pk) if pk is not None else view(request)
+    status_code = getattr(response, "status_code", 200)
+    payload = getattr(response, "data", None)
+    if status_code >= 400:
+        raise ValueError(str(payload or {"detail": "Request failed."}))
+    return payload
+
+
+def _invite_company_staff_sync(*, principal: UsersMcpPrincipal, data: dict[str, Any]) -> dict[str, Any]:
+    payload = _invoke_view_action_sync(
+        principal=principal,
+        viewset_cls=CompanyInvitationViewSet,
+        action="invite",
+        method="post",
+        data=data,
+    )
+    return {"profile_id": principal.profile_id, "invitation": payload}
+
+
+def _invite_company_staff_bulk_sync(*, principal: UsersMcpPrincipal, data: dict[str, Any]) -> dict[str, Any]:
+    payload = _invoke_view_action_sync(
+        principal=principal,
+        viewset_cls=CompanyInvitationViewSet,
+        action="invite_bulk",
+        method="post",
+        data=data,
+    )
+    return {"profile_id": principal.profile_id, "result": payload}
+
+
+def _revoke_company_invitation_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    invitation_id: str,
+) -> dict[str, Any]:
+    payload = _invoke_view_action_sync(
+        principal=principal,
+        viewset_cls=CompanyInvitationViewSet,
+        action="revoke",
+        method="post",
+        pk=invitation_id,
+    )
+    return {"profile_id": principal.profile_id, "result": payload}
+
+
+def _accept_company_invitation_sync(*, principal: UsersMcpPrincipal, data: dict[str, Any]) -> dict[str, Any]:
+    payload = _invoke_view_action_sync(
+        principal=principal,
+        viewset_cls=CompanyInvitationViewSet,
+        action="accept",
+        method="post",
+        data=data,
+    )
+    return {"profile_id": principal.profile_id, "result": payload}
+
+
+def _decline_company_invitation_sync(*, principal: UsersMcpPrincipal, data: dict[str, Any]) -> dict[str, Any]:
+    payload = _invoke_view_action_sync(
+        principal=principal,
+        viewset_cls=CompanyInvitationViewSet,
+        action="decline",
+        method="post",
+        data=data,
+    )
+    return {"profile_id": principal.profile_id, "result": payload}
+
+
+def _remove_company_staff_sync(*, principal: UsersMcpPrincipal, profile_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    payload = _invoke_view_action_sync(
+        principal=principal,
+        viewset_cls=CompanyProfileViewSet,
+        action="remove_staff",
+        method="post",
+        pk=profile_id,
+        data=data,
+    )
+    return {"profile_id": principal.profile_id, "result": payload}
+
+
+def _list_company_roles_sync(*, principal: UsersMcpPrincipal, profile_id: str) -> dict[str, Any]:
+    payload = _invoke_view_action_sync(
+        principal=principal,
+        viewset_cls=CompanyProfileViewSet,
+        action="roles",
+        method="get",
+        pk=profile_id,
+    )
+    return {"profile_id": principal.profile_id, "results": payload}
+
+
+def _list_company_groups_sync(*, principal: UsersMcpPrincipal, profile_id: str) -> dict[str, Any]:
+    payload = _invoke_view_action_sync(
+        principal=principal,
+        viewset_cls=CompanyProfileViewSet,
+        action="groups",
+        method="get",
+        pk=profile_id,
+    )
+    return {"profile_id": principal.profile_id, "results": payload}
+
+
+def _get_staff_permissions_summary_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    user_id: str,
+) -> dict[str, Any]:
+    active_profile = _accessible_profile_queryset(principal=principal).filter(id=principal.profile_id).first()
+    if active_profile is None:
+        raise RuntimeError("Authenticated profile_id is not accessible to the caller.")
+
+    target_user = (
+        User.objects.prefetch_related(
+            Prefetch(
+                "roles",
+                queryset=StaffRoleAssignment.objects.filter(
+                    is_active=True,
+                    role__profile_id=principal.profile_id,
+                ).select_related("role").prefetch_related("role__permissions"),
+                to_attr="active_role_assignments_for_mcp_summary",
+            ),
+            Prefetch(
+                "staff_groups",
+                queryset=StaffGroup.objects.filter(profile_id=principal.profile_id, is_active=True).prefetch_related("permissions"),
+                to_attr="active_staff_groups_for_mcp_summary",
+            ),
+            Prefetch(
+                "company_memberships",
+                queryset=CompanyMembership.objects.filter(profile_id=principal.profile_id, is_active=True).prefetch_related("custom_permissions"),
+                to_attr="profile_memberships_for_mcp_summary",
+            ),
+        )
+        .filter(id=user_id)
+        .first()
+    )
+    if target_user is None:
+        raise ValueError("User not found.")
+
+    membership = next(
+        (item for item in getattr(target_user, "profile_memberships_for_mcp_summary", []) if item.profile_id == principal.profile_id),
+        None,
+    )
+    role_assignments = getattr(target_user, "active_role_assignments_for_mcp_summary", [])
+    groups = getattr(target_user, "active_staff_groups_for_mcp_summary", [])
+
+    role_permissions = sorted(
+        {
+            permission.codename
+            for assignment in role_assignments
+            for permission in assignment.role.permissions.all()
+        }
+    )
+    group_permissions = sorted(
+        {
+            permission.codename
+            for group in groups
+            for permission in group.permissions.all()
+        }
+    )
+    custom_permissions = sorted(
+        permission.codename for permission in (membership.custom_permissions.all() if membership else [])
+    )
+    effective_permissions = sorted(set(role_permissions) | set(group_permissions) | set(custom_permissions))
+    return {
+        "profile_id": principal.profile_id,
+        "user_id": str(target_user.id),
+        "email": target_user.email,
+        "workspace_role": getattr(membership, "role", None),
+        "roles": sorted({assignment.role.name for assignment in role_assignments if assignment.role_id}),
+        "groups": sorted({group.name for group in groups}),
+        "role_permissions": role_permissions,
+        "group_permissions": group_permissions,
+        "custom_permissions": custom_permissions,
+        "effective_permissions": effective_permissions,
+    }
+
+
 def _build_transport_security_settings() -> TransportSecuritySettings:
     allowed_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
     allowed_hosts.extend(_parse_csv(os.getenv("USERS_MCP_ALLOWED_HOSTS") or os.getenv("ALLOWED_HOSTS")))
@@ -420,6 +744,194 @@ async def search_company_staff(
         query=query,
         limit=limit_value,
         include_inactive=include_inactive,
+    )
+
+
+@mcp.tool(
+    name="list_pending_company_invitations",
+    description="List pending company invitations for the active workspace.",
+)
+async def list_pending_company_invitations(query: str | None = None, limit: int = 10) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    limit_value = max(1, min(int(limit), 50))
+    return await sync_to_async(_list_pending_company_invitations_sync, thread_sensitive=True)(
+        principal=principal,
+        query=query,
+        limit=limit_value,
+    )
+
+
+@mcp.tool(
+    name="list_my_company_invitations",
+    description="List invitations addressed to the authenticated user's email.",
+)
+async def list_my_company_invitations(status: str | None = None, limit: int = 10) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    limit_value = max(1, min(int(limit), 50))
+    return await sync_to_async(_list_my_company_invitations_sync, thread_sensitive=True)(
+        principal=principal,
+        status=status,
+        limit=limit_value,
+    )
+
+
+@mcp.tool(
+    name="get_company_invitation",
+    description="Get a company invitation by invitation code.",
+)
+async def get_company_invitation(invitation_code: str) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_code = str(invitation_code or "").strip()
+    if not target_code:
+        raise ValueError("invitation_code is required")
+    return await sync_to_async(_get_company_invitation_sync, thread_sensitive=True)(
+        principal=principal,
+        invitation_code=target_code,
+    )
+
+
+@mcp.tool(
+    name="resend_company_invitation",
+    description="Resend a pending company invitation email.",
+)
+async def resend_company_invitation(invitation_id: str) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_id = str(invitation_id or "").strip()
+    if not target_id:
+        raise ValueError("invitation_id is required")
+    return await sync_to_async(_resend_company_invitation_sync, thread_sensitive=True)(
+        principal=principal,
+        invitation_id=target_id,
+    )
+
+
+@mcp.tool(
+    name="invite_company_staff",
+    description="Invite a staff member to the active company workspace.",
+)
+async def invite_company_staff(payload: dict[str, Any]) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    if not payload:
+        raise ValueError("payload is required")
+    return await sync_to_async(_invite_company_staff_sync, thread_sensitive=True)(
+        principal=principal,
+        data=payload,
+    )
+
+
+@mcp.tool(
+    name="invite_company_staff_bulk",
+    description="Bulk invite staff members to the active company workspace.",
+)
+async def invite_company_staff_bulk(payload: dict[str, Any]) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    if not payload:
+        raise ValueError("payload is required")
+    return await sync_to_async(_invite_company_staff_bulk_sync, thread_sensitive=True)(
+        principal=principal,
+        data=payload,
+    )
+
+
+@mcp.tool(
+    name="revoke_company_invitation",
+    description="Revoke a pending company invitation.",
+)
+async def revoke_company_invitation(invitation_id: str) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_id = str(invitation_id or "").strip()
+    if not target_id:
+        raise ValueError("invitation_id is required")
+    return await sync_to_async(_revoke_company_invitation_sync, thread_sensitive=True)(
+        principal=principal,
+        invitation_id=target_id,
+    )
+
+
+@mcp.tool(
+    name="accept_company_invitation",
+    description="Accept a company invitation using the backend's canonical accept workflow.",
+)
+async def accept_company_invitation(payload: dict[str, Any]) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    if not payload:
+        raise ValueError("payload is required")
+    return await sync_to_async(_accept_company_invitation_sync, thread_sensitive=True)(
+        principal=principal,
+        data=payload,
+    )
+
+
+@mcp.tool(
+    name="decline_company_invitation",
+    description="Decline a company invitation using the backend's canonical decline workflow.",
+)
+async def decline_company_invitation(payload: dict[str, Any]) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    if not payload:
+        raise ValueError("payload is required")
+    return await sync_to_async(_decline_company_invitation_sync, thread_sensitive=True)(
+        principal=principal,
+        data=payload,
+    )
+
+
+@mcp.tool(
+    name="remove_company_staff",
+    description="Remove a staff member from a company workspace.",
+)
+async def remove_company_staff(profile_id: str | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_profile_id = str(profile_id or principal.profile_id).strip()
+    if not target_profile_id:
+        raise ValueError("profile_id is required")
+    if not payload:
+        raise ValueError("payload is required")
+    return await sync_to_async(_remove_company_staff_sync, thread_sensitive=True)(
+        principal=principal,
+        profile_id=target_profile_id,
+        data=payload,
+    )
+
+
+@mcp.tool(
+    name="list_company_roles",
+    description="List roles in the active company workspace.",
+)
+async def list_company_roles(profile_id: str | None = None) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_profile_id = str(profile_id or principal.profile_id).strip()
+    return await sync_to_async(_list_company_roles_sync, thread_sensitive=True)(
+        principal=principal,
+        profile_id=target_profile_id,
+    )
+
+
+@mcp.tool(
+    name="list_company_groups",
+    description="List groups in the active company workspace.",
+)
+async def list_company_groups(profile_id: str | None = None) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_profile_id = str(profile_id or principal.profile_id).strip()
+    return await sync_to_async(_list_company_groups_sync, thread_sensitive=True)(
+        principal=principal,
+        profile_id=target_profile_id,
+    )
+
+
+@mcp.tool(
+    name="get_staff_permissions_summary",
+    description="Summarize a staff member's effective permissions in the active company workspace.",
+)
+async def get_staff_permissions_summary(user_id: str) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_user_id = str(user_id or "").strip()
+    if not target_user_id:
+        raise ValueError("user_id is required")
+    return await sync_to_async(_get_staff_permissions_summary_sync, thread_sensitive=True)(
+        principal=principal,
+        user_id=target_user_id,
     )
 
 
