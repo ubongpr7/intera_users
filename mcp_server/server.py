@@ -6,6 +6,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import BaseModel
+
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 
 import django
@@ -29,6 +31,7 @@ import uvicorn
 
 from mainapps.accounts.models import User
 from mainapps.profile.models import CompanyInvitation, CompanyMembership, CompanyProfile, StaffGroup, StaffRoleAssignment
+from mainapps.profile import payloads as profile_payloads
 from mainapps.profile.views import CompanyInvitationViewSet, CompanyProfileViewSet, StaffGroupViewSet, StaffRoleViewSet
 from subapps.utils.request_context import coerce_identity_id
 
@@ -57,6 +60,14 @@ def _extract_bearer_token(header_value: str | None) -> str | None:
     if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
         return None
     return parts[1].strip()
+
+
+def _payload_to_data(value: BaseModel | dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", exclude_none=True)
+    return value
 
 
 @dataclass(slots=True)
@@ -709,7 +720,10 @@ mcp = FastMCP(
     name="list_accessible_company_profiles",
     description="List company workspaces the authenticated caller can access.",
 )
-async def list_accessible_company_profiles(query: str | None = None, limit: int = 10) -> dict[str, Any]:
+async def list_accessible_company_profiles(
+    query: str | None = None,
+    limit: int = 10,
+) -> profile_payloads.CompanyProfileSearchResponsePayload:
     principal = get_current_principal(required=True)
     limit_value = max(1, min(int(limit), 25))
     return await sync_to_async(_list_accessible_company_profiles_sync, thread_sensitive=True)(
@@ -723,7 +737,7 @@ async def list_accessible_company_profiles(query: str | None = None, limit: int 
     name="get_active_company_profile",
     description="Get the active company workspace resolved from the authenticated caller's profile_id claim.",
 )
-async def get_active_company_profile() -> dict[str, Any]:
+async def get_active_company_profile() -> profile_payloads.ActiveCompanyProfileResponsePayload:
     principal = get_current_principal(required=True)
     return await sync_to_async(_get_active_company_profile_sync, thread_sensitive=True)(principal=principal)
 
@@ -736,7 +750,7 @@ async def search_company_staff(
     query: str | None = None,
     limit: int = 10,
     include_inactive: bool = False,
-) -> dict[str, Any]:
+) -> profile_payloads.CompanyStaffSearchResponsePayload:
     principal = get_current_principal(required=True)
     limit_value = max(1, min(int(limit), 25))
     return await sync_to_async(_search_company_staff_sync, thread_sensitive=True)(
@@ -751,7 +765,10 @@ async def search_company_staff(
     name="list_pending_company_invitations",
     description="List pending company invitations for the active workspace.",
 )
-async def list_pending_company_invitations(query: str | None = None, limit: int = 10) -> dict[str, Any]:
+async def list_pending_company_invitations(
+    query: str | None = None,
+    limit: int = 10,
+) -> profile_payloads.InvitationListResponsePayload:
     principal = get_current_principal(required=True)
     limit_value = max(1, min(int(limit), 50))
     return await sync_to_async(_list_pending_company_invitations_sync, thread_sensitive=True)(
@@ -765,7 +782,10 @@ async def list_pending_company_invitations(query: str | None = None, limit: int 
     name="list_my_company_invitations",
     description="List invitations addressed to the authenticated user's email.",
 )
-async def list_my_company_invitations(status: str | None = None, limit: int = 10) -> dict[str, Any]:
+async def list_my_company_invitations(
+    status: str | None = None,
+    limit: int = 10,
+) -> profile_payloads.InvitationListResponsePayload:
     principal = get_current_principal(required=True)
     limit_value = max(1, min(int(limit), 50))
     return await sync_to_async(_list_my_company_invitations_sync, thread_sensitive=True)(
@@ -779,7 +799,9 @@ async def list_my_company_invitations(status: str | None = None, limit: int = 10
     name="get_company_invitation",
     description="Get a company invitation by invitation code.",
 )
-async def get_company_invitation(invitation_code: str) -> dict[str, Any]:
+async def get_company_invitation(
+    invitation_code: str,
+) -> profile_payloads.InvitationDetailResponsePayload:
     principal = get_current_principal(required=True)
     target_code = str(invitation_code or "").strip()
     if not target_code:
@@ -794,7 +816,9 @@ async def get_company_invitation(invitation_code: str) -> dict[str, Any]:
     name="resend_company_invitation",
     description="Resend a pending company invitation email.",
 )
-async def resend_company_invitation(invitation_id: str) -> dict[str, Any]:
+async def resend_company_invitation(
+    invitation_id: str,
+) -> profile_payloads.CompanyInvitationActionResultPayload:
     principal = get_current_principal(required=True)
     target_id = str(invitation_id or "").strip()
     if not target_id:
@@ -809,13 +833,15 @@ async def resend_company_invitation(invitation_id: str) -> dict[str, Any]:
     name="invite_company_staff",
     description="Invite a staff member to the active company workspace.",
 )
-async def invite_company_staff(payload: dict[str, Any]) -> dict[str, Any]:
+async def invite_company_staff(
+    payload: profile_payloads.InviteCompanyStaffPayload,
+) -> profile_payloads.CompanyInvitationActionResultPayload:
     principal = get_current_principal(required=True)
     if not payload:
         raise ValueError("payload is required")
     return await sync_to_async(_invite_company_staff_sync, thread_sensitive=True)(
         principal=principal,
-        data=payload,
+        data=_payload_to_data(payload),
     )
 
 
@@ -823,13 +849,15 @@ async def invite_company_staff(payload: dict[str, Any]) -> dict[str, Any]:
     name="invite_company_staff_bulk",
     description="Bulk invite staff members to the active company workspace.",
 )
-async def invite_company_staff_bulk(payload: dict[str, Any]) -> dict[str, Any]:
+async def invite_company_staff_bulk(
+    payload: profile_payloads.BulkInviteCompanyStaffPayload,
+) -> profile_payloads.CompanyInvitationActionResultPayload:
     principal = get_current_principal(required=True)
     if not payload:
         raise ValueError("payload is required")
     return await sync_to_async(_invite_company_staff_bulk_sync, thread_sensitive=True)(
         principal=principal,
-        data=payload,
+        data=_payload_to_data(payload),
     )
 
 
@@ -837,7 +865,9 @@ async def invite_company_staff_bulk(payload: dict[str, Any]) -> dict[str, Any]:
     name="revoke_company_invitation",
     description="Revoke a pending company invitation.",
 )
-async def revoke_company_invitation(invitation_id: str) -> dict[str, Any]:
+async def revoke_company_invitation(
+    invitation_id: str,
+) -> profile_payloads.CompanyInvitationActionResultPayload:
     principal = get_current_principal(required=True)
     target_id = str(invitation_id or "").strip()
     if not target_id:
@@ -852,13 +882,15 @@ async def revoke_company_invitation(invitation_id: str) -> dict[str, Any]:
     name="accept_company_invitation",
     description="Accept a company invitation using the backend's canonical accept workflow.",
 )
-async def accept_company_invitation(payload: dict[str, Any]) -> dict[str, Any]:
+async def accept_company_invitation(
+    payload: profile_payloads.InvitationDecisionPayload,
+) -> profile_payloads.CompanyInvitationActionResultPayload:
     principal = get_current_principal(required=True)
     if not payload:
         raise ValueError("payload is required")
     return await sync_to_async(_accept_company_invitation_sync, thread_sensitive=True)(
         principal=principal,
-        data=payload,
+        data=_payload_to_data(payload),
     )
 
 
@@ -866,13 +898,15 @@ async def accept_company_invitation(payload: dict[str, Any]) -> dict[str, Any]:
     name="decline_company_invitation",
     description="Decline a company invitation using the backend's canonical decline workflow.",
 )
-async def decline_company_invitation(payload: dict[str, Any]) -> dict[str, Any]:
+async def decline_company_invitation(
+    payload: profile_payloads.InvitationDecisionPayload,
+) -> profile_payloads.CompanyInvitationActionResultPayload:
     principal = get_current_principal(required=True)
     if not payload:
         raise ValueError("payload is required")
     return await sync_to_async(_decline_company_invitation_sync, thread_sensitive=True)(
         principal=principal,
-        data=payload,
+        data=_payload_to_data(payload),
     )
 
 
@@ -880,7 +914,10 @@ async def decline_company_invitation(payload: dict[str, Any]) -> dict[str, Any]:
     name="remove_company_staff",
     description="Remove a staff member from a company workspace.",
 )
-async def remove_company_staff(profile_id: str | None = None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+async def remove_company_staff(
+    profile_id: str | None = None,
+    payload: profile_payloads.RemoveCompanyStaffPayload | None = None,
+) -> profile_payloads.CompanyInvitationActionResultPayload:
     principal = get_current_principal(required=True)
     target_profile_id = str(profile_id or principal.profile_id).strip()
     if not target_profile_id:
@@ -890,7 +927,7 @@ async def remove_company_staff(profile_id: str | None = None, payload: dict[str,
     return await sync_to_async(_remove_company_staff_sync, thread_sensitive=True)(
         principal=principal,
         profile_id=target_profile_id,
-        data=payload,
+        data=_payload_to_data(payload),
     )
 
 
@@ -898,7 +935,9 @@ async def remove_company_staff(profile_id: str | None = None, payload: dict[str,
     name="list_company_roles",
     description="List roles in the active company workspace.",
 )
-async def list_company_roles(profile_id: str | None = None) -> dict[str, Any]:
+async def list_company_roles(
+    profile_id: str | None = None,
+) -> profile_payloads.CompanyRolesResponsePayload:
     principal = get_current_principal(required=True)
     target_profile_id = str(profile_id or principal.profile_id).strip()
     return await sync_to_async(_list_company_roles_sync, thread_sensitive=True)(
@@ -911,7 +950,9 @@ async def list_company_roles(profile_id: str | None = None) -> dict[str, Any]:
     name="list_company_groups",
     description="List groups in the active company workspace.",
 )
-async def list_company_groups(profile_id: str | None = None) -> dict[str, Any]:
+async def list_company_groups(
+    profile_id: str | None = None,
+) -> profile_payloads.CompanyGroupsResponsePayload:
     principal = get_current_principal(required=True)
     target_profile_id = str(profile_id or principal.profile_id).strip()
     return await sync_to_async(_list_company_groups_sync, thread_sensitive=True)(
@@ -924,7 +965,9 @@ async def list_company_groups(profile_id: str | None = None) -> dict[str, Any]:
     name="get_staff_permissions_summary",
     description="Summarize a staff member's effective permissions in the active company workspace.",
 )
-async def get_staff_permissions_summary(user_id: str) -> dict[str, Any]:
+async def get_staff_permissions_summary(
+    user_id: str,
+) -> profile_payloads.StaffPermissionsSummaryResponsePayload:
     principal = get_current_principal(required=True)
     target_user_id = str(user_id or "").strip()
     if not target_user_id:
