@@ -3,7 +3,6 @@ from mainapps.profile.views import (
     CompanyProfileAddressViewSet,
     CompanyProfileViewSet,
     InventoryPolicyViewSet,
-    ProfileAgentSetupView,
     RecallPolicyViewSet,
     ReorderStrategyViewSet,
     StaffGroupViewSet,
@@ -14,7 +13,6 @@ from mainapps.profile.views import (
 __all__ = [
     "CompanyProfileViewSet",
     "CompanyInvitationViewSet",
-    "ProfileAgentSetupView",
     "StaffRoleViewSet",
     "StaffGroupViewSet",
     "CompanyProfileAddressViewSet",

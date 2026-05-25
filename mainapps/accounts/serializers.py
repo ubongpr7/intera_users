@@ -160,40 +160,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
                 role = membership.role if membership else None
         token["membership_role"] = role
 
-        agent = profile.agent if profile and hasattr(profile, "agent") else None
-        token["agent_name"] = agent.name if agent else ""
-        token["model_name"] = agent.model_name if agent else None
-        token["provider"] = agent.provider if agent else None
         token["mfa_verified"] = bool(getattr(user, "_jwt_mfa_verified", False))
-
-    @classmethod
-    def _build_ka2a_claim(cls, profile):
-        agent = profile.agent if profile and hasattr(profile, "agent") else None
-        if not agent:
-            return None
-
-        llm_claim = {
-            "provider": agent.provider,
-            "model": agent.model_name,
-        }
-
-        if agent.effective_base_url:
-            llm_claim["baseUrl"] = agent.effective_base_url
-
-        if agent.api_key:
-            llm_claim["apiKey"] = {"ciphertext": agent.api_key, "alg": "fernet"}
-
-        ka2a_claim = {
-            "v": 1,
-            "llm": llm_claim,
-        }
-
-        if agent.tavily_api_key:
-            ka2a_claim["tavily"] = {
-                "apiKey": {"ciphertext": agent.tavily_api_key, "alg": "fernet"}
-            }
-
-        return ka2a_claim
 
     @classmethod
     def issue_tokens_for_profile(cls, user, profile, mfa_verified=False):
@@ -202,9 +169,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         try:
             refresh = cls.get_token(user)
             access = refresh.access_token
-            ka2a_claim = cls._build_ka2a_claim(profile)
-            if ka2a_claim:
-                access["ka2a"] = ka2a_claim
             return refresh, access
         finally:
             if hasattr(user, "_jwt_active_profile"):
@@ -238,7 +202,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         data["access"] = str(access)
 
         accessible_profiles = self.list_accessible_profiles(user)
-        agent = profile.agent if profile and hasattr(profile, "agent") else None
         data.update({
             "id": user.id,
             "username": user.username,
@@ -249,9 +212,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             "currency": profile.currency if profile else None,
             "email": user.email,
             "first_name": getattr(user, "first_name", ""),
-            "model_name": agent.model_name if agent else None,
-            "agent_name": agent.name if agent else "",
-            "provider": agent.provider if agent else None,
         })
         return data
 
@@ -332,8 +292,6 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
             data["refresh"] = str(custom_refresh)
 
         profile = active_profile
-        agent = profile.agent if profile and hasattr(profile, "agent") else None
-
         data.update({
             'id': user.id,
             'username': user.username,
@@ -347,9 +305,6 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
             'currency': profile.currency if profile else None,
             'email': user.email,
             'first_name': getattr(user, 'first_name', ''),
-            'model_name': agent.model_name if agent else None,
-            'agent_name': agent.name if agent else '',
-            'provider': agent.provider if agent else None,
         })
         return data
 

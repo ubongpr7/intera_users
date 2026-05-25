@@ -3,7 +3,6 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     CompanyInvitationViewSet,
-    ProfileAgentSetupView,
     CompanyProfileViewSet,
     InventoryPolicyViewSet,
     RecallPolicyViewSet,
@@ -31,7 +30,6 @@ router.register(r'inventory-policies', InventoryPolicyViewSet, basename='invento
 
 urlpatterns = [
     path('', include(router.urls)),
-    path("agent-setup/", ProfileAgentSetupView.as_view(), name="profile-agent-setup"),
     path(
         'roles/<str:pk>/deactivate/',
         StaffRoleAssignmentViewSet.as_view({'post': 'deactivate'}),

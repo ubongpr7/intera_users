@@ -8,7 +8,7 @@ from .models import (
     CompanyInvitation,
     CompanyMembership,
     CompanyProfile, CompanyProfileAddress, StaffGroup, StaffRole, StaffRoleAssignment,
-     RecallPolicy, ReorderStrategy, InventoryPolicy, ProfileAgent, ModelVersion
+     RecallPolicy, ReorderStrategy, InventoryPolicy
 )
 
 User = get_user_model()
@@ -265,101 +265,3 @@ class CompanyInvitationSerializer(serializers.ModelSerializer):
 class CompanyInvitationRespondSerializer(serializers.Serializer):
     invitation_code = serializers.CharField()
 
-
-def _mask_secret(value: str) -> str:
-    raw = (value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) <= 8:
-        return "*" * len(raw)
-    return f"{raw[:4]}{'*' * (len(raw) - 8)}{raw[-4:]}"
-
-
-class ModelVersionOptionSerializer(serializers.ModelSerializer):
-    provider = serializers.CharField(source="llm.provider", read_only=True)
-    provider_label = serializers.CharField(source="llm.get_provider_display", read_only=True)
-    base_url = serializers.CharField(source="llm.base_url", read_only=True, allow_null=True)
-
-    class Meta:
-        model = ModelVersion
-        fields = ["id", "provider", "provider_label", "model_name", "base_url"]
-
-
-class ProfileAgentSetupSerializer(serializers.ModelSerializer):
-    provider = serializers.CharField(source="version.llm.provider", read_only=True)
-    provider_label = serializers.CharField(source="version.llm.get_provider_display", read_only=True)
-    model_name = serializers.CharField(source="version.model_name", read_only=True)
-    provider_base_url = serializers.CharField(source="version.llm.base_url", read_only=True, allow_null=True)
-    effective_base_url = serializers.SerializerMethodField()
-    version = serializers.PrimaryKeyRelatedField(queryset=ModelVersion.objects.select_related("llm").all())
-    has_api_key = serializers.SerializerMethodField()
-    has_tavily_api_key = serializers.SerializerMethodField()
-    api_key_masked = serializers.SerializerMethodField()
-    tavily_api_key_masked = serializers.SerializerMethodField()
-    api_key = serializers.CharField(write_only=True, required=False, allow_blank=False, trim_whitespace=True)
-    tavily_api_key = serializers.CharField(write_only=True, required=False, allow_blank=False, trim_whitespace=True)
-
-    class Meta:
-        model = ProfileAgent
-        fields = [
-            "id",
-            "profile",
-            "name",
-            "version",
-            "provider",
-            "provider_label",
-            "model_name",
-            "provider_base_url",
-            "effective_base_url",
-            "special_instruction",
-            "system_instruction",
-            "assistant_instruction",
-            "api_key",
-            "tavily_api_key",
-            "has_api_key",
-            "has_tavily_api_key",
-            "api_key_masked",
-            "tavily_api_key_masked",
-        ]
-        read_only_fields = [
-            "id",
-            "profile",
-            "provider",
-            "provider_label",
-            "model_name",
-            "provider_base_url",
-            "effective_base_url",
-            "has_api_key",
-            "has_tavily_api_key",
-            "api_key_masked",
-            "tavily_api_key_masked",
-        ]
-
-    def validate(self, attrs):
-        if self.instance is None:
-            missing_fields = []
-            for field_name in ("name", "version", "api_key", "tavily_api_key"):
-                if not attrs.get(field_name):
-                    missing_fields.append(field_name)
-            if missing_fields:
-                raise serializers.ValidationError(
-                    {field: "This field is required when creating agent setup." for field in missing_fields}
-                )
-        return attrs
-
-    def get_has_api_key(self, obj):
-        return bool(obj.decrypted_api_key)
-
-    def get_effective_base_url(self, obj):
-        return obj.effective_base_url or None
-
-    def get_has_tavily_api_key(self, obj):
-        return bool(obj.decrypted_tavily_api_key)
-
-    def get_api_key_masked(self, obj):
-        return _mask_secret(obj.decrypted_api_key)
-
-    def get_tavily_api_key_masked(self, obj):
-        return _mask_secret(obj.decrypted_tavily_api_key)
-        
-    

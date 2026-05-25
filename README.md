@@ -94,6 +94,13 @@ Authentication:
 
 Recommended K-A2A config for this MCP server:
 
+## A2A ownership
+
+`intera_users` no longer owns agent setup, runtime configuration, or AI credential delivery.
+
+- `intera_users` owns identity, workspace membership, roles, and permissions.
+- [kafka_a2a](/Users/ubongpr7/dev/pr7/inventory/kafka_a2a) owns workspace agent setup, runtime registry, conversations, and AI service configuration.
+
 ```json
 {
   "id": "users",

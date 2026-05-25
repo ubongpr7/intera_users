@@ -64,7 +64,6 @@ def _clear_session_cookies(response):
 
 
 def _build_auth_payload(user, profile, refresh, access):
-    agent = profile.agent if profile and hasattr(profile, "agent") else None
     return {
         "refresh": str(refresh),
         "access": str(access),
@@ -80,9 +79,6 @@ def _build_auth_payload(user, profile, refresh, access):
         "currency": profile.currency if profile else None,
         "email": user.email,
         "first_name": getattr(user, "first_name", ""),
-        "model_name": agent.model_name if agent else None,
-        "agent_name": agent.name if agent else "",
-        "provider": agent.provider if agent else None,
     }
 
 

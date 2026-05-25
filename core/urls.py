@@ -39,6 +39,6 @@ urlpatterns = [
     path('permission_api/', include("mainapps.permit.api.urls",)),
     path('management/', include("mainapps.profile.urls")),
     path('common/', include("mainapps.common.urls")),
+    path('agent_api/', include("mainapps.agents.api.urls")),
     
 ]
-

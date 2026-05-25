@@ -49,6 +49,15 @@ class CombinedPermissions(models.TextChoices):
     DELETE_COMPANY_ADDRESS = 'delete_company_address', _('Can delete company address')
     MANAGE_COMPANY_ADDRESS_SETTINGS = 'manage_company_address_settings', _('Can manage company address settings')
 
+    # Agent Permissions
+    CREATE_AGENT = 'create_agent', _('Can create agent')
+    READ_AGENT = 'read_agent', _('Can read agent')
+    UPDATE_AGENT = 'update_agent', _('Can update agent')
+    DELETE_AGENT = 'delete_agent', _('Can delete agent')
+    MANAGE_AGENT_SETTINGS = 'manage_agent_settings', _('Can manage agent settings')
+    INTERACT_WITH_AGENT = 'interact_with_agent', _('Can interact with agent')
+    VIEW_AGENT_ACTIVITY = 'view_agent_activity', _('Can view agent activity')
+
     # Inventory Permissions
     CREATE_INVENTORY = 'create_inventory', _('Can create inventory')
     READ_INVENTORY = 'read_inventory', _('Can read inventory')
@@ -236,6 +245,5 @@ class CustomUserPermission(models.Model):
             # Get human-readable name from TextChoices
             self.name = CombinedPermissions(self.codename).label
         super().save(*args, **kwargs)
-
 
 

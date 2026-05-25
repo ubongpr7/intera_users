@@ -15,7 +15,6 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from mainapps.accounts.api.serializers import MyUserSerializer
 from mainapps.common.settings import get_company_or_profile
@@ -27,8 +26,6 @@ from .models import (
     CompanyInvitation,
     CompanyProfile,
     CompanyProfileAddress,
-    ModelVersion,
-    ProfileAgent,
     InventoryPolicy,
     RecallPolicy,
     ReorderStrategy,
@@ -45,8 +42,6 @@ from .serializers import (
     CompanyProfileDetailSerializer,
     CompanyProfileListSerializer,
     InventoryPolicySerializer,
-    ModelVersionOptionSerializer,
-    ProfileAgentSetupSerializer,
     RecallPolicySerializer,
     ReorderStrategySerializer,
     CompanyMembershipStaffSerializer,
@@ -287,87 +282,6 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             "profile_age_days": (timezone.now().date() - profile.created_at.date()).days,
         }
         return Response(analytics)
-
-
-class ProfileAgentSetupView(PermissionRequiredMixin, APIView):
-    permission_classes = [IsAuthenticated, HasModelRequestPermission]
-    required_permission = "manage_company_settings"
-
-    @staticmethod
-    def _available_model_versions():
-        return ModelVersion.objects.select_related("llm").order_by("llm__provider", "model_name")
-
-    def get(self, request):
-        profile = _profile_from_request(request)
-        agent = (
-            ProfileAgent.objects.select_related("version", "version__llm")
-            .filter(profile=profile)
-            .first()
-        )
-        payload = {
-            "configured": bool(agent),
-            "agent": ProfileAgentSetupSerializer(agent).data if agent else None,
-            "available_versions": ModelVersionOptionSerializer(self._available_model_versions(), many=True).data,
-        }
-        return Response(payload, status=status.HTTP_200_OK)
-
-    def post(self, request):
-        profile = _profile_from_request(request)
-        instance = (
-            ProfileAgent.objects.select_related("version", "version__llm")
-            .filter(profile=profile)
-            .first()
-        )
-        serializer = ProfileAgentSetupSerializer(
-            instance=instance,
-            data=request.data,
-            partial=bool(instance),
-        )
-        serializer.is_valid(raise_exception=True)
-        agent = serializer.save(profile=profile)
-
-        response_status = status.HTTP_200_OK if instance else status.HTTP_201_CREATED
-        return Response(
-            {
-                "configured": True,
-                "agent": ProfileAgentSetupSerializer(agent).data,
-                "available_versions": ModelVersionOptionSerializer(
-                    self._available_model_versions(),
-                    many=True,
-                ).data,
-            },
-            status=response_status,
-        )
-
-    def patch(self, request):
-        profile = _profile_from_request(request)
-        instance = (
-            ProfileAgent.objects.select_related("version", "version__llm")
-            .filter(profile=profile)
-            .first()
-        )
-        if not instance:
-            return Response(
-                {"detail": "Agent setup has not been created for this company profile."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        serializer = ProfileAgentSetupSerializer(instance=instance, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        agent = serializer.save(profile=profile)
-
-        return Response(
-            {
-                "configured": True,
-                "agent": ProfileAgentSetupSerializer(agent).data,
-                "available_versions": ModelVersionOptionSerializer(
-                    self._available_model_versions(),
-                    many=True,
-                ).data,
-            },
-            status=status.HTTP_200_OK,
-        )
-
 
 class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = CompanyInvitation.objects.select_related("profile", "invited_by", "accepted_by")

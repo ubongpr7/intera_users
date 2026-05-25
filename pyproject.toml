@@ -24,6 +24,7 @@ dependencies = [
     "djoser>=2.3.3",
     "dotenv>=0.9.9",
     "drf-yasg>=1.21.11",
+    "edge-tts>=7.2.8",
     "mcp[cli]>=1.26.0",
     "oauth2-provider>=0.0",
     "pillow>=12.0.0",

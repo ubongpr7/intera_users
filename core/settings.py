@@ -28,6 +28,9 @@ if not SECRET_KEY:
     raise ImproperlyConfigured("SECRET_KEY must be set.")
 
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
+DATABASE_CONN_MAX_AGE = int(os.getenv("DATABASE_CONN_MAX_AGE", "600"))
+DATABASE_CONN_HEALTH_CHECKS = os.getenv("DATABASE_CONN_HEALTH_CHECKS", "True") == "True"
+DATABASE_DISABLE_SERVER_SIDE_CURSORS = os.getenv("DATABASE_DISABLE_SERVER_SIDE_CURSORS", "True") == "True"
 
 # Logging
 # Django's default logging config won't show `logger.info(...)` from our modules unless you
@@ -113,6 +116,7 @@ CORE_APPS = [
     'mainapps.common',
     'mainapps.kafka_reliability',
     'mainapps.profile',
+    'mainapps.agents',
     'mainapps.permit',
 ]
 
@@ -152,7 +156,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
-
+"""
 if LOCAL_SERVER:
     DATABASES = {
         'default': {
@@ -168,6 +172,16 @@ else:
             conn_health_checks=True,
         )
     }
+"""
+DATABASES = {
+    'default': dj_database_url.config(
+        default=os.getenv('DATABASE_URL'),
+        conn_max_age=DATABASE_CONN_MAX_AGE,
+        conn_health_checks=DATABASE_CONN_HEALTH_CHECKS,
+    )
+}
+
+DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = DATABASE_DISABLE_SERVER_SIDE_CURSORS
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -206,11 +220,11 @@ MEDIA_URL = '/media/'
 MEDIAFILES_DIRS=[os.path.join(BASE_DIR,'media')]
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-EMAIL_BACKEND = 'django_smtp_ssl.SSLEmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 465  
-EMAIL_USE_SSL = True
-EMAIL_USE_TLS = False
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django_smtp_ssl.SSLEmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "465"))
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "True") == "True"
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "False") == "True"
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD =os.getenv('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "noreply@interaims.com")

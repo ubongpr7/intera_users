@@ -5,7 +5,6 @@ from .views import (
     CompanyProfileAddressViewSet,
     CompanyProfileViewSet,
     InventoryPolicyViewSet,
-    ProfileAgentSetupView,
     RecallPolicyViewSet,
     ReorderStrategyViewSet,
     StaffGroupViewSet,
@@ -25,7 +24,6 @@ router.register(r"inventory-policies", InventoryPolicyViewSet, basename="invento
 
 urlpatterns = [
     path("", include(router.urls)),
-    path("agent-setup/", ProfileAgentSetupView.as_view(), name="profile-agent-setup"),
     path(
         "roles/<str:pk>/deactivate/",
         StaffRoleAssignmentViewSet.as_view({"post": "deactivate"}),

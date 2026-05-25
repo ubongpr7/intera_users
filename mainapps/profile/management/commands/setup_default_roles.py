@@ -40,6 +40,13 @@ class Command(BaseCommand):
                 'name': 'Administrator',
                 'description': 'Full access to all inventory and company management features',
                 'permissions': [
+                    CombinedPermissions.CREATE_AGENT,
+                    CombinedPermissions.READ_AGENT,
+                    CombinedPermissions.UPDATE_AGENT,
+                    CombinedPermissions.DELETE_AGENT,
+                    CombinedPermissions.MANAGE_AGENT_SETTINGS,
+                    CombinedPermissions.INTERACT_WITH_AGENT,
+                    CombinedPermissions.VIEW_AGENT_ACTIVITY,
                     # All inventory permissions
                     CombinedPermissions.CREATE_INVENTORY,
                     CombinedPermissions.READ_INVENTORY,
@@ -71,6 +78,9 @@ class Command(BaseCommand):
                 'name': 'Inventory Manager',
                 'description': 'Manage inventory items and stock levels',
                 'permissions': [
+                    CombinedPermissions.READ_AGENT,
+                    CombinedPermissions.INTERACT_WITH_AGENT,
+                    CombinedPermissions.VIEW_AGENT_ACTIVITY,
                     CombinedPermissions.CREATE_INVENTORY,
                     CombinedPermissions.READ_INVENTORY,
                     CombinedPermissions.UPDATE_INVENTORY,
@@ -86,6 +96,9 @@ class Command(BaseCommand):
                 'name': 'Purchase Manager',
                 'description': 'Manage purchase orders and supplier relationships',
                 'permissions': [
+                    CombinedPermissions.READ_AGENT,
+                    CombinedPermissions.INTERACT_WITH_AGENT,
+                    CombinedPermissions.VIEW_AGENT_ACTIVITY,
                     CombinedPermissions.CREATE_PURCHASE_ORDER,
                     CombinedPermissions.READ_PURCHASE_ORDER,
                     CombinedPermissions.UPDATE_PURCHASE_ORDER,
@@ -101,6 +114,8 @@ class Command(BaseCommand):
                 'name': 'Warehouse Staff',
                 'description': 'Basic warehouse operations and stock handling',
                 'permissions': [
+                    CombinedPermissions.READ_AGENT,
+                    CombinedPermissions.INTERACT_WITH_AGENT,
                     CombinedPermissions.READ_INVENTORY,
                     CombinedPermissions.READ_STOCK_ITEM,
                     CombinedPermissions.UPDATE_STOCK_ITEM,
@@ -113,6 +128,9 @@ class Command(BaseCommand):
                 'name': 'Viewer',
                 'description': 'Read-only access to inventory and reports',
                 'permissions': [
+                    CombinedPermissions.READ_AGENT,
+                    CombinedPermissions.INTERACT_WITH_AGENT,
+                    CombinedPermissions.VIEW_AGENT_ACTIVITY,
                     CombinedPermissions.READ_INVENTORY,
                     CombinedPermissions.READ_STOCK_ITEM,
                     CombinedPermissions.READ_PURCHASE_ORDER,

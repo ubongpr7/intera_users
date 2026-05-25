@@ -73,6 +73,9 @@ class Command(BaseCommand):
         # Special cases for complex category names
         category_map = {
             'company_settings': 'Company',
+            'agent_settings': 'Agent',
+            'agent_activity': 'Agent',
+            'with_agent': 'Agent',
             'inventory_reports': 'Inventory',
             'dashboard': 'Dashboard',
             'stock_item': 'Stock Item'
