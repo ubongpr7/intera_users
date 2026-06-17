@@ -98,6 +98,12 @@ class CompanyProfile(models.Model):
         null=True,
         verbose_name=_('Company name'),
     )
+    logo = models.ImageField(
+        upload_to='company_logos/%y/%m/%d/',
+        blank=True,
+        null=True,
+        verbose_name=_('Company logo'),
+    )
     
     industry = models.CharField(
         max_length=50,

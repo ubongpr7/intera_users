@@ -131,6 +131,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             "id": str(profile.id),
             "name": profile.name,
             "company_code": profile.company_code,
+            "logo": profile.logo.url if getattr(profile, "logo", None) else None,
+            "industry": profile.industry,
             "owner_id": str(profile.owner_id) if profile.owner_id else None,
             "currency": profile.currency,
             "role": role,
@@ -142,6 +144,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["permissions"] = cls.get_all_permissions(user, profile=profile)
         token["profile_id"] = str(profile.id) if profile else None
         token["company_code"] = profile.company_code if profile else None
+        token["profile_industry"] = profile.industry if profile else None
         token["email"] = user.email
         token["mfa_enabled"] = bool(getattr(user, "mfa_enabled", False))
         token["has_setup_mfa"] = bool(getattr(user, "has_setup_mfa", False))
@@ -345,15 +348,32 @@ class UserCreateSerializer(BaseUserCreateSerializer):
 
 class MyUserSerializer(serializers.ModelSerializer):
     """Serializer for user details"""
+    picture = serializers.SerializerMethodField()
     
     class Meta:
         model = User
         fields = (
-            'id', 'email', 'first_name', 'last_name', 'get_full_name','role'
+            'id',
+            'email',
+            'first_name',
+            'last_name',
+            'get_full_name',
+            'role',
+            'phone',
+            'sex',
+            'date_of_birth',
+            'picture',
+            'is_verified',
+            'mfa_enabled',
+            'has_setup_mfa',
+            'profile',
         )
         read_only_fields = (
             'id', 'get_full_name',
         )
+
+    def get_picture(self, obj):
+        return obj.get_picture()
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating user information"""
@@ -361,7 +381,12 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'first_name', 'last_name', 
+            'first_name',
+            'last_name',
+            'phone',
+            'sex',
+            'date_of_birth',
+            'picture',
         )
 
 

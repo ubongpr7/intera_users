@@ -78,7 +78,11 @@ class Command(BaseCommand):
             'with_agent': 'Agent',
             'inventory_reports': 'Inventory',
             'dashboard': 'Dashboard',
-            'stock_item': 'Stock Item'
+            'stock_item': 'Stock Item',
+            'pos': 'POS',
+            'pos_settings': 'POS',
+            'pos_remittances': 'POS',
+            'pos_reports': 'POS',
         }
         
         # Apply special mappings or general conversion

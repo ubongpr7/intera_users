@@ -30,6 +30,7 @@ def _serialize_company_profile(profile: CompanyProfile) -> dict[str, Any]:
         "profile_id": profile.id,
         "company_code": profile.company_code,
         "display_name": display_name,
+        "industry": profile.industry,
         "owner_user_id": profile.owner_id,
         "is_active": True,
     }

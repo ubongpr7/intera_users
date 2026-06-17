@@ -8,10 +8,13 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from django.db.models import Q
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from subapps.email_system.emails import send_html_email
+from subapps.utils.request_context import get_request_profile_id
+from mainapps.permit.permit import HasModelRequestPermission
 from .models import User, VerificationCode
 from djoser.social.views import ProviderAuthView
 from django.contrib.auth import get_user_model
@@ -20,13 +23,14 @@ from mainapps.common.settings import get_company_or_profile
 from .serializers import SocialJWTSerializer
 from django.conf import settings
 from .serializers import (
+    MyUserSerializer,
     MyUserSerializer as UserSerializer,
-     UserUpdateSerializer, 
-     UserQuotaMetadataSerializer,
-     TokenRefreshSerializer,
-     MyTokenObtainPairSerializer,
-     OwnerRegistrationSerializer,
-     CompanyContextSwitchSerializer,
+    UserUpdateSerializer,
+    UserQuotaMetadataSerializer,
+    TokenRefreshSerializer,
+    MyTokenObtainPairSerializer,
+    OwnerRegistrationSerializer,
+    CompanyContextSwitchSerializer,
 )
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -92,10 +96,22 @@ class StandardResultsSetPagination(PageNumberPagination):
 
 class UserViewSet(viewsets.ModelViewSet):
     """User management ViewSet"""
+    ADMIN_ACTIONS = {"list", "retrieve", "update", "partial_update", "destroy", "search", "create_staff"}
+    PERSONAL_ACTIONS = {"me", "partial_update_me", "quota_meta_data"}
+
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
+    required_permission = "manage_company_settings"
     pagination_class = StandardResultsSetPagination
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_permissions(self):
+        if getattr(self, "action", None) in self.PERSONAL_ACTIONS:
+            return [IsAuthenticated()]
+        if getattr(self, "action", None) in self.ADMIN_ACTIONS:
+            return [IsAuthenticated(), HasModelRequestPermission()]
+        return [IsAuthenticated()]
 
     def get_serializer_class(self):
         if self.action in ['update', 'partial_update', ]:
@@ -115,11 +131,13 @@ class UserViewSet(viewsets.ModelViewSet):
             return User.objects.none()
         if self.request.user.is_staff:
             return User.objects.all()
+        if getattr(self, "action", None) in self.ADMIN_ACTIONS:
+            profile_id = get_request_profile_id(self.request, as_str=False)
+            if profile_id:
+                return User.objects.filter(profile_id=profile_id)
         return User.objects.filter(id=self.request.user.id)
 
     def destroy(self, request, *args, **kwargs):
-        if not request.user.is_staff:
-            return Response({'detail': 'Only staff can delete users.'}, status=status.HTTP_403_FORBIDDEN)
         return super().destroy(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
@@ -128,10 +146,17 @@ class UserViewSet(viewsets.ModelViewSet):
             status=status.HTTP_405_METHOD_NOT_ALLOWED,
         )
 
-    @action(detail=False, methods=['get', ])
+    @action(detail=False, methods=['get'])
     def me(self, request):
-        """Get or update user profile"""
-        return Response(UserSerializer(request.user).data)
+        """Return the authenticated user's personal profile."""
+        return Response(MyUserSerializer(request.user).data)
+
+    @me.mapping.patch
+    def partial_update_me(self, request):
+        serializer = UserUpdateSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(MyUserSerializer(request.user).data)
     
     
     @action(detail=False, methods=['get'])

@@ -71,6 +71,13 @@ class CombinedPermissions(models.TextChoices):
     VIEW_INVENTORY_REPORTS = 'view_inventory_reports', _('Can view inventory reports')
     VIEW_DASHBOARD_REPORTS = 'can_view_dashboard', _('Can view Dashboard reports')
 
+    # POS Permissions
+    READ_POS = 'read_pos', _('Can read POS workspace')
+    OPERATE_POS = 'operate_pos', _('Can operate POS sessions, orders, and checkout')
+    MANAGE_POS_SETTINGS = 'manage_pos_settings', _('Can manage POS settings')
+    MANAGE_POS_REMITTANCES = 'manage_pos_remittances', _('Can manage POS remittances')
+    VIEW_POS_REPORTS = 'view_pos_reports', _('Can view POS reports')
+
     CREATE_INVENTORY_CATEGORY = 'create_inventory_category', _('Can create inventory')
     READ_INVENTORY_CATEGORY = 'read_inventory_category', _('Can read inventory')
     UPDATE_INVENTORY_CATEGORY = 'update_inventory_category', _('Can update inventory')
@@ -245,5 +252,4 @@ class CustomUserPermission(models.Model):
             # Get human-readable name from TextChoices
             self.name = CombinedPermissions(self.codename).label
         super().save(*args, **kwargs)
-
 

@@ -12,6 +12,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 
 import django
 from django.apps import apps
+from django.db import close_old_connections
 from asgiref.sync import sync_to_async
 
 if not apps.ready:
@@ -457,15 +458,20 @@ def _resend_company_invitation_sync(
     principal: UsersMcpPrincipal,
     invitation_id: str,
 ) -> dict[str, Any]:
+    close_old_connections()
     factory = APIRequestFactory()
     request = factory.post(
         "/mcp/internal",
         data={},
         format="json",
         HTTP_AUTHORIZATION=f"Bearer {principal.token}",
+        HTTP_HOST="localhost",
     )
     view = CompanyInvitationViewSet.as_view({"post": "resend"})
-    response = view(request, pk=invitation_id)
+    try:
+        response = view(request, pk=invitation_id)
+    finally:
+        close_old_connections()
     status_code = getattr(response, "status_code", 200)
     payload = getattr(response, "data", None)
     if status_code >= 400:
@@ -486,26 +492,33 @@ def _invoke_view_action_sync(
     data: dict[str, Any] | None = None,
     query_params: dict[str, Any] | None = None,
 ) -> Any:
+    close_old_connections()
     factory = APIRequestFactory()
     http_method = method.lower().strip()
     path = "/mcp/internal"
-    auth_header = f"Bearer {principal.token}"
+    request_headers = {
+        "HTTP_AUTHORIZATION": f"Bearer {principal.token}",
+        "HTTP_HOST": "localhost",
+    }
 
     if http_method == "get":
-        request = factory.get(path, data=query_params or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+        request = factory.get(path, data=query_params or {}, format="json", **request_headers)
     elif http_method == "post":
-        request = factory.post(path, data=data or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+        request = factory.post(path, data=data or {}, format="json", **request_headers)
     elif http_method == "patch":
-        request = factory.patch(path, data=data or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+        request = factory.patch(path, data=data or {}, format="json", **request_headers)
     elif http_method == "put":
-        request = factory.put(path, data=data or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+        request = factory.put(path, data=data or {}, format="json", **request_headers)
     elif http_method == "delete":
-        request = factory.delete(path, data=data or {}, format="json", HTTP_AUTHORIZATION=auth_header)
+        request = factory.delete(path, data=data or {}, format="json", **request_headers)
     else:
         raise ValueError(f"Unsupported method: {method}")
 
     view = viewset_cls.as_view({http_method: action})
-    response = view(request, pk=pk) if pk is not None else view(request)
+    try:
+        response = view(request, pk=pk) if pk is not None else view(request)
+    finally:
+        close_old_connections()
     status_code = getattr(response, "status_code", 200)
     payload = getattr(response, "data", None)
     if status_code >= 400:

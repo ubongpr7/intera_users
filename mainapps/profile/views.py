@@ -13,6 +13,7 @@ from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -33,6 +34,7 @@ from .models import (
     StaffRole,
     StaffRoleAssignment,
 )
+from .default_staff_presets import populate_default_staff_access
 from .serializers import (
     AddStaffSerializer,
     AssignUserToRoleSerializer,
@@ -72,6 +74,7 @@ def _profile_from_request(request):
 class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = CompanyProfile.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     required_permission = {
         "list": "read_company",
         "retrieve": "read_company",
@@ -84,6 +87,7 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         "remove_staff": "manage_company_settings",
         "roles": "manage_company_settings",
         "groups": "manage_company_settings",
+        "populate_default_access": "manage_company_settings",
         "addresses": "read_company_address",
         "add_address": "create_company_address",
         "policies": "manage_inventory_settings",
@@ -227,6 +231,12 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = self.get_object()
         serializer = StaffGroupSerializer(profile.get_staff_groups(), many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="populate-default-access")
+    def populate_default_access(self, request, pk=None):
+        profile = self.get_object()
+        payload = populate_default_staff_access(profile)
+        return Response(payload, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def addresses(self, request, pk=None):

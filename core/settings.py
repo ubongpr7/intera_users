@@ -79,6 +79,7 @@ LOGGING = {
 _default_allowed_hosts = [
     'localhost',
     '127.0.0.1',
+    '10.0.2.2',
     'accounts.interaims.com',
     'dev.accounts.interaims.com',
     'host.docker.internal'
@@ -381,6 +382,7 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
     'X-profile-id',  
+    'x-device-id',
 ]
 
 _default_cors_allowed_origins = [
@@ -398,7 +400,9 @@ _default_cors_allowed_origins = [
     'https://dev.accounts.interaims.com',
     'https://www.interaims.com',
     'https://interaims.com',
-    'https://dev.interaims.com'
+    'https://dev.interaims.com',
+    'http://10.0.2.2:3000',
+    'http://10.0.2.2:8080',
 
 ]
 CORS_ALLOWED_ORIGINS = _split_csv_env("CORS_ALLOWED_ORIGINS", _default_cors_allowed_origins)
@@ -406,6 +410,8 @@ CORS_ALLOWED_ORIGINS = _split_csv_env("CORS_ALLOWED_ORIGINS", _default_cors_allo
 _default_csrf_trusted_origins = sorted(set(CORS_ALLOWED_ORIGINS + [
     "https://accounts.interaims.com",
     "https://dev.accounts.interaims.com",
+    "http://10.0.2.2:3000",
+    "http://10.0.2.2:8080",
 ]))
 CSRF_TRUSTED_ORIGINS = _split_csv_env("CSRF_TRUSTED_ORIGINS", _default_csrf_trusted_origins)
 

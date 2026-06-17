@@ -118,7 +118,8 @@ class UserDetailView(APIView):
 class UserReadOnlyView(viewsets.ReadOnlyModelViewSet):
     serializer_class=MyUserSerializer
     queryset= User.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModelRequestPermission]
+    required_permission = "manage_company_settings"
 
     def get_queryset(self):
         if self.request.user.is_staff:
