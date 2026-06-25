@@ -200,3 +200,4 @@ class CompanyInvitationActionTests(TestCase):
         invitation.refresh_from_db()
         self.assertEqual(invitation.status, CompanyInvitation.InvitationStatus.PENDING)
         send_html_email_mock.assert_called_once()
+
