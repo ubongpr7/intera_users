@@ -11,6 +11,7 @@ from .views import (
     StaffRoleViewSet,
     StaffGroupViewSet,
     CompanyProfileAddressViewSet,
+    SupportAccessGrantViewSet,
 )
 
 router = DefaultRouter()
@@ -22,6 +23,7 @@ router.register(r'groups', StaffGroupViewSet, basename='staff-group')
 router.register(r'addresses',     CompanyProfileAddressViewSet, basename='address')
 router.register(r'assignments', StaffRoleAssignmentViewSet, basename='staff-role-assignment')
 router.register(r'invitations', CompanyInvitationViewSet, basename='company-invitation')
+router.register(r'support-access-grants', SupportAccessGrantViewSet, basename='support-access-grant')
 
 # Policy endpoints
 router.register(r'recall-policies', RecallPolicyViewSet, basename='recall-policy')

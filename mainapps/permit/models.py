@@ -34,6 +34,13 @@ class CombinedPermissions(models.TextChoices):
     APPROVE_COMPANY = 'approve_company', _('Can approve company')
     REJECT_COMPANY = 'reject_company', _('Can reject company')
     MANAGE_COMPANY_SETTINGS = 'manage_company_settings', _('Can manage company settings')
+    CREATE_SUPPORT_ACCESS_GRANT = 'create_support_access_grant', _('Can create support access grants')
+    READ_SUPPORT_ACCESS_GRANT = 'read_support_access_grant', _('Can read support access grants')
+    UPDATE_SUPPORT_ACCESS_GRANT = 'update_support_access_grant', _('Can update support access grants')
+    REVOKE_SUPPORT_ACCESS_GRANT = 'revoke_support_access_grant', _('Can revoke support access grants')
+    APPROVE_SUPPORT_ACCESS_GRANT = 'approve_support_access_grant', _('Can approve support access grants')
+    VIEW_SUPPORT_ACCESS_AUDIT = 'view_support_access_audit', _('Can view support access audit')
+    VIEW_AUDIT_TRAIL = 'view_audit_trail', _('Can view workspace audit trail')
 
     # Contact Permissions
     CREATE_CONTACT = 'create_contact', _('Can create contact')
@@ -252,4 +259,3 @@ class CustomUserPermission(models.Model):
             # Get human-readable name from TextChoices
             self.name = CombinedPermissions(self.codename).label
         super().save(*args, **kwargs)
-

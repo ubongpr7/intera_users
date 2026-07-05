@@ -19,6 +19,12 @@ from .models import User, VerificationCode
 from djoser.social.views import ProviderAuthView
 from django.contrib.auth import get_user_model
 from mainapps.common.settings import get_company_or_profile
+from mainapps.profile.models import SupportAccessGrant
+from subapps.kafka.producers import (
+    build_actor,
+    publish_support_access_workspace_entered,
+    publish_support_access_workspace_exited,
+)
 
 from .serializers import SocialJWTSerializer
 from django.conf import settings
@@ -67,7 +73,7 @@ def _clear_session_cookies(response):
     response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path=settings.AUTH_COOKIE_PATH)
 
 
-def _build_auth_payload(user, profile, refresh, access):
+def _build_auth_payload(user, profile, refresh, access, *, support_grant=None):
     return {
         "refresh": str(refresh),
         "access": str(access),
@@ -75,15 +81,44 @@ def _build_auth_payload(user, profile, refresh, access):
         "username": user.username,
         "is_verified": getattr(user, "is_verified", False),
         "profile": str(profile.id) if profile else None,
-        "profile_context": MyTokenObtainPairSerializer._profile_payload(profile, user),
+        "profile_context": MyTokenObtainPairSerializer._profile_payload(
+            profile,
+            user,
+            support_grant=support_grant,
+        ),
         "profiles": [
-            MyTokenObtainPairSerializer._profile_payload(item, user)
-            for item in MyTokenObtainPairSerializer.list_accessible_profiles(user)
+            MyTokenObtainPairSerializer._profile_payload(
+                item.profile,
+                user,
+                support_grant=item.support_grant,
+            )
+            for item in MyTokenObtainPairSerializer.list_accessible_profile_contexts(user)
         ],
         "currency": profile.currency if profile else None,
         "email": user.email,
         "first_name": getattr(user, "first_name", ""),
     }
+
+
+def _get_request_support_grant(request):
+    auth = getattr(request, "auth", None)
+    support_access_grant_id = None
+    if auth is not None and hasattr(auth, "payload"):
+        support_access_grant_id = auth.payload.get("support_access_grant_id")
+    if not support_access_grant_id:
+        return None
+    return (
+        SupportAccessGrant.objects.select_related(
+            "profile",
+            "grantee_user",
+            "created_by",
+            "approved_by",
+            "revoked_by",
+        )
+        .prefetch_related("custom_permissions")
+        .filter(id=support_access_grant_id)
+        .first()
+    )
 
 
 
@@ -309,13 +344,16 @@ class CompanyContextSwitchView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
+        previous_support_grant = _get_request_support_grant(request)
         serializer = CompanyContextSwitchSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        profile = MyTokenObtainPairSerializer.resolve_active_profile(
+        profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
             request.user,
             profile_id=serializer.validated_data.get("profile_id"),
             company_code=serializer.validated_data.get("company_code"),
+            support_access_grant_id=serializer.validated_data.get("support_access_grant_id"),
         )
+        profile = profile_access.profile
         if not profile:
             return Response(
                 {"detail": "No matching company context found for this account."},
@@ -332,8 +370,33 @@ class CompanyContextSwitchView(APIView):
             request.user,
             profile,
             mfa_verified=mfa_verified,
+            support_grant=profile_access.support_grant,
         )
-        payload = _build_auth_payload(request.user, profile, refresh, access)
+        payload = _build_auth_payload(
+            request.user,
+            profile,
+            refresh,
+            access,
+            support_grant=profile_access.support_grant,
+        )
+        previous_support_grant_id = str(previous_support_grant.id) if previous_support_grant else None
+        current_support_grant_id = (
+            str(profile_access.support_grant.id) if profile_access.support_grant is not None else None
+        )
+        if previous_support_grant is not None and previous_support_grant_id != current_support_grant_id:
+            publish_support_access_workspace_exited(
+                previous_support_grant,
+                actor=build_actor(request=request, user=request.user),
+            )
+        if profile_access.support_grant is not None and previous_support_grant_id != current_support_grant_id:
+            publish_support_access_workspace_entered(
+                profile_access.support_grant,
+                actor=build_actor(
+                    request=request,
+                    user=request.user,
+                    role=profile_access.support_grant.membership_role,
+                ),
+            )
         response = Response(payload, status=status.HTTP_200_OK)
         _set_session_cookies(response, access_token=str(access), refresh_token=str(refresh))
         return response
@@ -343,24 +406,36 @@ class CompanyMembershipListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        profiles = MyTokenObtainPairSerializer.list_accessible_profiles(request.user)
-        profile_map = {str(profile.id): profile for profile in profiles}
+        profiles = MyTokenObtainPairSerializer.list_accessible_profile_contexts(request.user)
+        profile_map = {str(item.profile.id): item for item in profiles}
 
-        active_profile = None
+        active_access = None
         auth = getattr(request, "auth", None)
         token_profile_id = None
+        token_support_grant_id = None
         if auth is not None and hasattr(auth, "payload"):
             token_profile_id = auth.payload.get("profile_id")
+            token_support_grant_id = auth.payload.get("support_access_grant_id")
         if token_profile_id:
-            active_profile = profile_map.get(str(token_profile_id))
-        if not active_profile and request.user.profile_id:
-            active_profile = profile_map.get(str(request.user.profile_id))
+            active_access = profile_map.get(str(token_profile_id))
+        if not active_access and request.user.profile_id:
+            active_access = profile_map.get(str(request.user.profile_id))
+        if token_support_grant_id:
+            active_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
+                request.user,
+                profile_id=token_profile_id if token_profile_id else None,
+                support_access_grant_id=token_support_grant_id,
+            )
 
         return Response(
             {
-                "active_profile_id": str(active_profile.id) if active_profile else None,
+                "active_profile_id": str(active_access.profile.id) if active_access and active_access.profile else None,
                 "profiles": [
-                    MyTokenObtainPairSerializer._profile_payload(profile, request.user)
+                    MyTokenObtainPairSerializer._profile_payload(
+                        profile.profile,
+                        request.user,
+                        support_grant=profile.support_grant,
+                    )
                     for profile in profiles
                 ],
             },
@@ -422,6 +497,12 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
+        support_grant = _get_request_support_grant(request)
+        if support_grant is not None:
+            publish_support_access_workspace_exited(
+                support_grant,
+                actor=build_actor(request=request, user=request.user),
+            )
         response = Response(status=status.HTTP_204_NO_CONTENT)
         _clear_session_cookies(response)
         return response
@@ -497,12 +578,16 @@ class MfaVerifyView(APIView):
             user.save(update_fields=['mfa_enabled', 'has_setup_mfa'])
         auth = getattr(request, "auth", None)
         token_profile_id = None
+        token_support_grant_id = None
         if auth is not None and hasattr(auth, "payload"):
             token_profile_id = auth.payload.get("profile_id")
-        profile = MyTokenObtainPairSerializer.resolve_active_profile(
+            token_support_grant_id = auth.payload.get("support_access_grant_id")
+        profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
             user,
             profile_id=token_profile_id if token_profile_id else None,
+            support_access_grant_id=token_support_grant_id,
         )
+        profile = profile_access.profile
         if profile and user.profile_id != profile.id:
             User.objects.filter(id=user.id).update(profile=profile)
             user.profile = profile
@@ -511,8 +596,15 @@ class MfaVerifyView(APIView):
             user,
             profile,
             mfa_verified=True,
+            support_grant=profile_access.support_grant,
         )
-        payload = _build_auth_payload(user, profile, refresh, access)
+        payload = _build_auth_payload(
+            user,
+            profile,
+            refresh,
+            access,
+            support_grant=profile_access.support_grant,
+        )
         payload.update({
             "detail": "MFA verified successfully.",
             "mfa_enabled": True,

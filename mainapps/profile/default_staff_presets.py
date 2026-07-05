@@ -32,6 +32,7 @@ def get_default_staff_access_presets() -> list[StaffAccessPreset]:
                 CombinedPermissions.MANAGE_POS_SETTINGS,
                 CombinedPermissions.MANAGE_POS_REMITTANCES,
                 CombinedPermissions.VIEW_POS_REPORTS,
+                CombinedPermissions.VIEW_AUDIT_TRAIL,
                 CombinedPermissions.CREATE_INVENTORY,
                 CombinedPermissions.READ_INVENTORY,
                 CombinedPermissions.UPDATE_INVENTORY,
@@ -64,6 +65,7 @@ def get_default_staff_access_presets() -> list[StaffAccessPreset]:
                 CombinedPermissions.MANAGE_POS_REMITTANCES,
                 CombinedPermissions.VIEW_POS_REPORTS,
                 CombinedPermissions.VIEW_DASHBOARD_REPORTS,
+                CombinedPermissions.VIEW_AUDIT_TRAIL,
             ),
         ),
         StaffAccessPreset(
@@ -101,6 +103,7 @@ def get_default_staff_access_presets() -> list[StaffAccessPreset]:
                 CombinedPermissions.CREATE_STOCK_LOCATION,
                 CombinedPermissions.UPDATE_STOCK_LOCATION,
                 CombinedPermissions.VIEW_DASHBOARD_REPORTS,
+                CombinedPermissions.VIEW_AUDIT_TRAIL,
             ),
         ),
         StaffAccessPreset(
@@ -119,6 +122,7 @@ def get_default_staff_access_presets() -> list[StaffAccessPreset]:
                 CombinedPermissions.TRANSFER_STOCK_ITEM,
                 CombinedPermissions.ADJUST_STOCK_ITEM_QUANTITY,
                 CombinedPermissions.VIEW_STOCK_ITEM_HISTORY,
+                CombinedPermissions.VIEW_AUDIT_TRAIL,
             ),
         ),
         StaffAccessPreset(
@@ -137,6 +141,7 @@ def get_default_staff_access_presets() -> list[StaffAccessPreset]:
                 CombinedPermissions.CREATE_PURCHASE_ORDER_LINE_ITEM,
                 CombinedPermissions.READ_PURCHASE_ORDER_LINE_ITEM,
                 CombinedPermissions.UPDATE_PURCHASE_ORDER_LINE_ITEM,
+                CombinedPermissions.VIEW_AUDIT_TRAIL,
             ),
         ),
         StaffAccessPreset(

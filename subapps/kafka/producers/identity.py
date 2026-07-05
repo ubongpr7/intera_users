@@ -5,6 +5,7 @@ from typing import Any
 from mainapps.accounts.models import User
 from mainapps.profile.models import CompanyMembership, CompanyProfile
 from subapps.kafka.client import publish_event
+from subapps.kafka.producers.platform_events import publish_audit_fact
 from subapps.kafka.topics import (
     IDENTITY_COMPANY_PROFILE_TOPIC,
     IDENTITY_MEMBERSHIP_TOPIC,
@@ -50,60 +51,136 @@ def _serialize_membership(membership: CompanyMembership) -> dict[str, Any]:
 
 
 def publish_user_upserted(user: User) -> dict[str, Any]:
-    return publish_event(
+    payload = _serialize_user(user)
+    event = publish_event(
         IDENTITY_USER_TOPIC,
         "identity.user.upserted",
-        _serialize_user(user),
+        payload,
         key=str(user.id),
     )
+    publish_audit_fact(
+        event_name="identity.user.upserted",
+        payload=payload,
+        actor={"user_id": str(user.id), "email": user.email, "name": payload["full_name"]},
+        target={"type": "user", "id": str(user.id), "label": payload["full_name"]},
+        summary=f"User profile synced for {user.email}.",
+        visibility_scope="platform",
+        key=str(user.id),
+    )
+    return event
 
 
 def publish_user_deleted(user: User) -> dict[str, Any]:
     payload = _serialize_user(user)
     payload["is_active"] = False
-    return publish_event(
+    event = publish_event(
         IDENTITY_USER_TOPIC,
         "identity.user.deleted",
         payload,
         key=str(user.id),
     )
+    publish_audit_fact(
+        event_name="identity.user.deleted",
+        payload=payload,
+        actor={"user_id": str(user.id), "email": user.email, "name": payload["full_name"]},
+        target={"type": "user", "id": str(user.id), "label": payload["full_name"]},
+        summary=f"User profile deactivated for {user.email}.",
+        severity="warning",
+        visibility_scope="platform",
+        key=str(user.id),
+    )
+    return event
 
 
 def publish_company_profile_upserted(profile: CompanyProfile) -> dict[str, Any]:
-    return publish_event(
+    payload = _serialize_company_profile(profile)
+    event = publish_event(
         IDENTITY_COMPANY_PROFILE_TOPIC,
         "identity.company_profile.upserted",
-        _serialize_company_profile(profile),
+        payload,
         key=str(profile.id),
     )
+    publish_audit_fact(
+        event_name="identity.company_profile.upserted",
+        payload=payload,
+        workspace_id=str(profile.id),
+        actor={"user_id": str(profile.owner_id or ""), "role": "owner"},
+        target={"type": "company_profile", "id": str(profile.id), "label": payload["display_name"]},
+        summary=f"Workspace profile updated for {payload['display_name']}.",
+        key=str(profile.id),
+    )
+    return event
 
 
 def publish_company_profile_deleted(profile: CompanyProfile) -> dict[str, Any]:
     payload = _serialize_company_profile(profile)
     payload["is_active"] = False
-    return publish_event(
+    event = publish_event(
         IDENTITY_COMPANY_PROFILE_TOPIC,
         "identity.company_profile.deleted",
         payload,
         key=str(profile.id),
     )
+    publish_audit_fact(
+        event_name="identity.company_profile.deleted",
+        payload=payload,
+        workspace_id=str(profile.id),
+        actor={"user_id": str(profile.owner_id or ""), "role": "owner"},
+        target={"type": "company_profile", "id": str(profile.id), "label": payload["display_name"]},
+        summary=f"Workspace profile archived for {payload['display_name']}.",
+        severity="warning",
+        key=str(profile.id),
+    )
+    return event
 
 
 def publish_company_membership_upserted(membership: CompanyMembership) -> dict[str, Any]:
-    return publish_event(
+    payload = _serialize_membership(membership)
+    event = publish_event(
         IDENTITY_MEMBERSHIP_TOPIC,
         "identity.membership.upserted",
-        _serialize_membership(membership),
+        payload,
         key=f"{membership.profile_id}:{membership.user_id}",
     )
+    publish_audit_fact(
+        event_name="identity.membership.upserted",
+        payload=payload,
+        workspace_id=str(membership.profile_id),
+        actor={"user_id": str(membership.user_id), "email": payload["user"]["email"], "role": payload["role"]},
+        target={
+            "type": "membership",
+            "id": f"{membership.profile_id}:{membership.user_id}",
+            "label": payload["profile"]["display_name"],
+            "reference_number": payload["profile"]["company_code"],
+        },
+        summary=f"{payload['user']['full_name']} membership synced for {payload['profile']['display_name']}.",
+        key=f"{membership.profile_id}:{membership.user_id}",
+    )
+    return event
 
 
 def publish_company_membership_deleted(membership: CompanyMembership) -> dict[str, Any]:
     payload = _serialize_membership(membership)
     payload["is_active"] = False
-    return publish_event(
+    event = publish_event(
         IDENTITY_MEMBERSHIP_TOPIC,
         "identity.membership.deleted",
         payload,
         key=f"{membership.profile_id}:{membership.user_id}",
     )
+    publish_audit_fact(
+        event_name="identity.membership.deleted",
+        payload=payload,
+        workspace_id=str(membership.profile_id),
+        actor={"user_id": str(membership.user_id), "email": payload["user"]["email"], "role": payload["role"]},
+        target={
+            "type": "membership",
+            "id": f"{membership.profile_id}:{membership.user_id}",
+            "label": payload["profile"]["display_name"],
+            "reference_number": payload["profile"]["company_code"],
+        },
+        summary=f"{payload['user']['full_name']} membership removed from {payload['profile']['display_name']}.",
+        severity="warning",
+        key=f"{membership.profile_id}:{membership.user_id}",
+    )
+    return event

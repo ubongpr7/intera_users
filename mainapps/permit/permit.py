@@ -4,6 +4,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from rest_framework_simplejwt.tokens import UntypedToken
+from mainapps.profile.support_access import validate_support_token
 
 class HasModelRequestPermission(permissions.BasePermission):
     """
@@ -12,9 +13,9 @@ class HasModelRequestPermission(permissions.BasePermission):
     def get_user_permissions(self, token_str):
         try:
             token= UntypedToken(token_str)
-            return set(token.payload.get('permissions') or []), token.payload.get('owner_id')
+            return set(token.payload.get('permissions') or []), token.payload.get('owner_id'), token.payload
         except Exception:
-            return set(), None
+            return set(), None, {}
 
     def has_permission(self, request, view):
         permission = getattr(view, 'required_permission', None)
@@ -32,14 +33,27 @@ class HasModelRequestPermission(permissions.BasePermission):
 
         token = getattr(request, "auth", None)
         if token is not None and hasattr(token, "payload"):
-            user_permissions = set(token.payload.get("permissions") or [])
-            owner_id = token.payload.get("owner_id")
+            payload = token.payload
+            if not validate_support_token(
+                request.user,
+                profile_id=payload.get("profile_id"),
+                support_access_grant_id=payload.get("support_access_grant_id"),
+            ):
+                return False
+            user_permissions = set(payload.get("permissions") or [])
+            owner_id = payload.get("owner_id")
         else:
             auth_header = request.headers.get('Authorization', '')
             parts = auth_header.split()
             if len(parts) != 2 or parts[0].lower() != "bearer":
                 return False
-            user_permissions, owner_id = self.get_user_permissions(parts[1])
+            user_permissions, owner_id, payload = self.get_user_permissions(parts[1])
+            if not validate_support_token(
+                request.user,
+                profile_id=payload.get("profile_id"),
+                support_access_grant_id=payload.get("support_access_grant_id"),
+            ):
+                return False
 
         if owner_id and str(owner_id) == str(request.user.id):
             return True

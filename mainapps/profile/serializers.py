@@ -4,11 +4,18 @@ from django.utils import timezone
 from cities_light.models import City, Country, Region, SubRegion
 
 from mainapps.accounts.api.serializers import MyUserSerializer
+from mainapps.permit.models import CustomUserPermission
+from mainapps.profile.support_access import user_has_direct_profile_access
+from .support_access_presets import (
+    DISALLOWED_SUPPORT_CUSTOM_PERMISSION_CODENAMES,
+    get_support_access_preset,
+    get_support_access_presets,
+)
 from .models import (
     CompanyInvitation,
     CompanyMembership,
     CompanyProfile, CompanyProfileAddress, StaffGroup, StaffRole, StaffRoleAssignment,
-     RecallPolicy, ReorderStrategy, InventoryPolicy
+     RecallPolicy, ReorderStrategy, InventoryPolicy, SupportAccessGrant
 )
 
 User = get_user_model()
@@ -232,10 +239,23 @@ class InventoryPolicySerializer(serializers.ModelSerializer):
  
 class StaffRoleAssignmentSerializer(serializers.ModelSerializer):
     role_name=serializers.CharField(source='role.name',read_only=True)
+    assigned_by_email = serializers.CharField(source="assigned_by.email", read_only=True)
     class Meta:
         model = StaffRoleAssignment
-        fields = ['id','role_name','is_active','role','start_date','end_date']
-        read_only_fields = ['id']
+        fields = [
+            'id',
+            'user',
+            'profile',
+            'role',
+            'role_name',
+            'is_active',
+            'start_date',
+            'end_date',
+            'assigned_by',
+            'assigned_by_email',
+            'assigned_at',
+        ]
+        read_only_fields = ['id', 'profile', 'assigned_by', 'assigned_by_email', 'assigned_at']
 
 
 class CompanyInvitationSerializer(serializers.ModelSerializer):
@@ -265,3 +285,207 @@ class CompanyInvitationSerializer(serializers.ModelSerializer):
 class CompanyInvitationRespondSerializer(serializers.Serializer):
     invitation_code = serializers.CharField()
 
+
+class SupportAccessPresetSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+    permissions = serializers.ListField(child=serializers.CharField())
+
+
+class SupportAccessGrantSerializer(serializers.ModelSerializer):
+    profile_name = serializers.CharField(source="profile.name", read_only=True)
+    grantee_user = MyUserSerializer(read_only=True)
+    accepted_by = MyUserSerializer(read_only=True)
+    created_by = MyUserSerializer(read_only=True)
+    approved_by = MyUserSerializer(read_only=True)
+    revoked_by = MyUserSerializer(read_only=True)
+    custom_permissions = serializers.SlugRelatedField(
+        slug_field="codename",
+        many=True,
+        read_only=True,
+    )
+    status = serializers.SerializerMethodField()
+    effective_permissions = serializers.SerializerMethodField()
+    preset = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SupportAccessGrant
+        fields = [
+            "id",
+            "profile",
+            "profile_name",
+            "grantee_user",
+            "accepted_by",
+            "grantee_email_snapshot",
+            "invitation_code",
+            "created_by",
+            "approved_by",
+            "revoked_by",
+            "reason",
+            "ticket_reference",
+            "permission_mode",
+            "membership_role",
+            "custom_permissions",
+            "effective_permissions",
+            "starts_at",
+            "expires_at",
+            "revoked_at",
+            "responded_at",
+            "last_used_at",
+            "status",
+            "notes",
+            "created_at",
+            "updated_at",
+            "preset",
+        ]
+        read_only_fields = fields
+
+    def get_status(self, obj):
+        return obj.current_status
+
+    def get_effective_permissions(self, obj):
+        return obj.effective_permission_codenames()
+
+    def get_preset(self, obj):
+        preset = get_support_access_preset(obj.permission_mode)
+        if not preset:
+            return None
+        return SupportAccessPresetSerializer(instance=preset).data
+
+
+class SupportAccessGrantCreateSerializer(serializers.ModelSerializer):
+    grantee_email = serializers.EmailField(write_only=True)
+    custom_permissions = serializers.SlugRelatedField(
+        slug_field="codename",
+        many=True,
+        queryset=CustomUserPermission.objects.all(),
+        required=False,
+    )
+    starts_at = serializers.DateTimeField(required=False, default=timezone.now)
+
+    class Meta:
+        model = SupportAccessGrant
+        fields = [
+            "id",
+            "grantee_email",
+            "reason",
+            "ticket_reference",
+            "permission_mode",
+            "membership_role",
+            "custom_permissions",
+            "starts_at",
+            "expires_at",
+            "notes",
+        ]
+        read_only_fields = ["id"]
+
+    def validate_permission_mode(self, value):
+        if not get_support_access_preset(value):
+            raise serializers.ValidationError("Unsupported support access preset.")
+        return value
+
+    def validate_membership_role(self, value):
+        if value == CompanyMembership.MembershipRole.OWNER:
+            raise serializers.ValidationError("Support access cannot assign the owner role.")
+        return value
+
+    def validate_custom_permissions(self, permissions):
+        disallowed = sorted(
+            permission.codename
+            for permission in permissions
+            if permission.codename in DISALLOWED_SUPPORT_CUSTOM_PERMISSION_CODENAMES
+        )
+        if disallowed:
+            raise serializers.ValidationError(
+                f"These permissions cannot be granted through temporary support access: {', '.join(disallowed)}."
+            )
+        return permissions
+
+    def validate(self, attrs):
+        profile = self.context["profile"]
+        grantee_email = attrs["grantee_email"].strip().lower()
+        grantee_user = User.objects.filter(email__iexact=grantee_email, is_active=True).first()
+        starts_at = attrs.get("starts_at") or timezone.now()
+        expires_at = attrs["expires_at"]
+
+        if expires_at <= starts_at:
+            raise serializers.ValidationError({"expires_at": "Expiry must be after the start time."})
+        if expires_at <= timezone.now():
+            raise serializers.ValidationError({"expires_at": "Expiry must be in the future."})
+        if grantee_user and user_has_direct_profile_access(grantee_user, profile):
+            raise serializers.ValidationError(
+                {"grantee_email": "This user already has direct access to the requested workspace."}
+            )
+        if SupportAccessGrant.objects.filter(
+            profile=profile,
+            revoked_at__isnull=True,
+            grantee_email_snapshot__iexact=grantee_email,
+            starts_at__lt=expires_at,
+            expires_at__gt=starts_at,
+        ).exclude(status__in=[SupportAccessGrant.Status.CONSUMED, SupportAccessGrant.Status.DECLINED]).exists():
+            raise serializers.ValidationError(
+                {"non_field_errors": ["An overlapping support access request already exists for this email and workspace."]}
+            )
+
+        attrs["grantee_email"] = grantee_email
+        attrs["grantee_user"] = grantee_user
+        attrs["starts_at"] = starts_at
+        return attrs
+
+    def create(self, validated_data):
+        grantee_email = validated_data.pop("grantee_email")
+        custom_permissions = validated_data.pop("custom_permissions", [])
+        request = self.context["request"]
+        profile = self.context["profile"]
+        grant = SupportAccessGrant.objects.create(
+            profile=profile,
+            created_by=request.user,
+            approved_by=request.user,
+            grantee_email_snapshot=grantee_email,
+            **validated_data,
+        )
+        if custom_permissions:
+            grant.custom_permissions.set(custom_permissions)
+        return grant
+
+
+class SupportAccessGrantExtendSerializer(serializers.Serializer):
+    expires_at = serializers.DateTimeField()
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        grant = self.context["grant"]
+        expires_at = attrs["expires_at"]
+
+        if grant.current_status == SupportAccessGrant.Status.REVOKED:
+            raise serializers.ValidationError({"detail": "Revoked support grants cannot be extended."})
+        if expires_at <= timezone.now():
+            raise serializers.ValidationError({"expires_at": "Expiry must be in the future."})
+        if expires_at <= grant.expires_at:
+            raise serializers.ValidationError({"expires_at": "New expiry must be later than the current expiry."})
+        if SupportAccessGrant.objects.filter(
+            profile=grant.profile,
+            revoked_at__isnull=True,
+            grantee_email_snapshot__iexact=grant.grantee_email_snapshot,
+            starts_at__lt=expires_at,
+            expires_at__gt=grant.starts_at,
+        ).exclude(id=grant.id).exclude(
+            status__in=[SupportAccessGrant.Status.CONSUMED, SupportAccessGrant.Status.DECLINED]
+        ).exists():
+            raise serializers.ValidationError(
+                {"expires_at": "The requested extension overlaps another support access request for this email."}
+            )
+        return attrs
+
+
+class SupportAccessGrantRevokeSerializer(serializers.Serializer):
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class SupportAccessGrantRespondSerializer(serializers.Serializer):
+    invitation_code = serializers.CharField()
+
+
+def serialize_support_access_presets():
+    return SupportAccessPresetSerializer(instance=get_support_access_presets(), many=True).data

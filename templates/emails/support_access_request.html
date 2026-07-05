@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(180deg, #fbfcff 0%, #eef4ff 100%);
+            margin: 0;
+            padding: 32px 16px;
+            color: #172033;
+        }
+        .card {
+            max-width: 620px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 24px;
+            padding: 40px 36px;
+            box-shadow: 0 18px 48px rgba(23, 32, 51, 0.10);
+            border: 1px solid #dbe5f4;
+        }
+        .eyebrow {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #2457d6;
+            margin-bottom: 16px;
+        }
+        h1 {
+            font-size: 30px;
+            line-height: 1.2;
+            margin: 0 0 14px;
+            color: #111827;
+        }
+        p {
+            line-height: 1.6;
+            margin: 0 0 16px;
+        }
+        .summary {
+            margin: 24px 0 28px;
+            padding: 20px;
+            border-radius: 18px;
+            background-color: #f8fbff;
+            border: 1px solid #d9e6ff;
+        }
+        .summary-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #6480b3;
+            margin-bottom: 6px;
+        }
+        .summary-value {
+            font-size: 15px;
+            font-weight: 600;
+            color: #172033;
+            margin-bottom: 14px;
+        }
+        .cta {
+            display: inline-block;
+            margin: 8px 0 18px;
+            padding: 14px 24px;
+            border-radius: 14px;
+            background-color: #2457d6;
+            color: #ffffff !important;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 15px;
+        }
+        .meta {
+            font-size: 14px;
+            color: #5c6c86;
+        }
+        .footer {
+            margin-top: 28px;
+            font-size: 13px;
+            color: #6b7280;
+        }
+        .fallback-link {
+            display: block;
+            margin-top: 12px;
+            color: #2457d6 !important;
+            text-decoration: underline;
+            word-break: break-all;
+        }
+        @media only screen and (max-width: 640px) {
+            body {
+                padding: 16px 10px;
+            }
+            .card {
+                padding: 28px 20px;
+                border-radius: 20px;
+            }
+            h1 {
+                font-size: 26px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="eyebrow">Temporary Support Access</div>
+        <h1>Review access request for {{ company_name }}</h1>
+        <p><strong>{{ requester_email }}</strong> requested temporary workspace access for <strong>{{ recipient_email }}</strong>.</p>
+
+        {% if reason %}
+        <p>{{ reason }}</p>
+        {% endif %}
+
+        <div class="summary">
+            <span class="summary-label">Workspace</span>
+            <div class="summary-value">{{ company_name }}</div>
+            <span class="summary-label">Preset</span>
+            <div class="summary-value">{{ preset_name }}</div>
+            <span class="summary-label">Role</span>
+            <div class="summary-value">{{ membership_role }}</div>
+            <span class="summary-label">Access starts</span>
+            <div class="summary-value">{{ starts_at|date:"M j, Y g:i A T" }}</div>
+            <span class="summary-label">Access expires</span>
+            <div class="summary-value">{{ expires_at|date:"M j, Y g:i A T" }}</div>
+            {% if ticket_reference %}
+            <span class="summary-label">Ticket reference</span>
+            <div class="summary-value">{{ ticket_reference }}</div>
+            {% endif %}
+        </div>
+
+        {% if accept_url %}
+        <p><a class="cta" href="{{ accept_url }}">Review request</a></p>
+        <p class="meta">
+            {% if is_registered_user %}
+            Sign in with <strong>{{ recipient_email }}</strong> to accept or decline this request.
+            {% else %}
+            If you do not have an account yet, create one with <strong>{{ recipient_email }}</strong>, then return to accept or decline this request.
+            {% endif %}
+        </p>
+        <div class="footer">
+            <p>If the button does not open correctly, copy and paste this link into your browser:</p>
+            <a class="fallback-link" href="{{ accept_url }}">{{ accept_url }}</a>
+            <p>Support access does not become active until you accept this request.</p>
+        </div>
+        {% else %}
+        <div class="footer">
+            <p>This request link is not configured yet. Set the frontend site URL in the user service environment so support-request emails can open the app directly.</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

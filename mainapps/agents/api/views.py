@@ -18,7 +18,10 @@ from rest_framework.permissions import IsAuthenticated
 
 from mainapps.common.settings import get_company_or_profile
 from mainapps.permit.permit import HasModelRequestPermission, PermissionRequiredMixin
-from subapps.utils.request_context import get_request_profile_id
+from subapps.utils.request_context import (
+    get_request_profile_id,
+    get_request_support_access_grant_id,
+)
 
 from mainapps.agents.models import (
     AgentVisibilityChoices,
@@ -153,7 +156,11 @@ async def _probe_mcp_server(*, server_url: str, headers: dict[str, str], timeout
 
 def _profile_from_request(request):
     profile_id = get_request_profile_id(request, required=True, as_str=False)
-    profile = get_company_or_profile(request.user, profile_id=profile_id)
+    profile = get_company_or_profile(
+        request.user,
+        profile_id=profile_id,
+        support_access_grant_id=get_request_support_access_grant_id(request),
+    )
     if not profile:
         raise PermissionDenied("Profile context is not accessible for this user.")
     return profile

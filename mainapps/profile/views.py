@@ -7,6 +7,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from django.db import transaction
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
@@ -20,6 +21,25 @@ from rest_framework.response import Response
 from mainapps.accounts.api.serializers import MyUserSerializer
 from mainapps.common.settings import get_company_or_profile
 from mainapps.permit.permit import HasModelRequestPermission, PermissionRequiredMixin
+from subapps.kafka.producers import (
+    build_actor,
+    publish_support_access_grant_activated,
+    publish_support_access_grant_created,
+    publish_support_access_grant_declined,
+    publish_support_access_grant_extended,
+    publish_support_access_grant_revoked,
+)
+from subapps.kafka.producers.access_control import (
+    _group_names,
+    _permission_codes,
+    publish_group_changed,
+    publish_invitation_changed,
+    publish_membership_changed,
+    publish_role_assignment_changed,
+    publish_role_changed,
+    publish_user_groups_updated,
+    user_display_name,
+)
 from subapps.email_system.emails import send_html_email
 
 from .models import (
@@ -30,11 +50,14 @@ from .models import (
     InventoryPolicy,
     RecallPolicy,
     ReorderStrategy,
+    SupportAccessGrant,
     StaffGroup,
     StaffRole,
     StaffRoleAssignment,
 )
 from .default_staff_presets import populate_default_staff_access
+from .support_access import expire_support_grants, user_has_direct_profile_access
+from .support_access_presets import get_support_access_preset
 from .serializers import (
     AddStaffSerializer,
     AssignUserToRoleSerializer,
@@ -53,6 +76,12 @@ from .serializers import (
     StaffRoleAssignmentSerializer,
     StaffRoleListSerializer,
     StaffRoleSerializer,
+    SupportAccessGrantCreateSerializer,
+    SupportAccessGrantExtendSerializer,
+    SupportAccessGrantRespondSerializer,
+    SupportAccessGrantRevokeSerializer,
+    SupportAccessGrantSerializer,
+    serialize_support_access_presets,
 )
 
 User = get_user_model()
@@ -61,14 +90,61 @@ User = get_user_model()
 def _profile_from_request(request):
     auth = getattr(request, "auth", None)
     token_profile_id = None
+    support_access_grant_id = None
     if auth is not None and hasattr(auth, "payload"):
         token_profile_id = auth.payload.get("profile_id")
+        support_access_grant_id = auth.payload.get("support_access_grant_id")
     if not token_profile_id:
         raise PermissionDenied("No active company context. Switch company before accessing this resource.")
-    profile = get_company_or_profile(request.user, profile_id=token_profile_id)
+    profile = get_company_or_profile(
+        request.user,
+        profile_id=token_profile_id,
+        support_access_grant_id=support_access_grant_id,
+    )
     if not profile:
         raise PermissionDenied("Profile context is not accessible for this user.")
     return profile
+
+
+def _staff_usage(profile, *, include_pending=True):
+    user_ids = set(
+        CompanyMembership.objects.filter(profile=profile, is_active=True)
+        .values_list("user_id", flat=True)
+    )
+    if profile.owner_id:
+        user_ids.add(profile.owner_id)
+    user_ids.update(User.objects.filter(profile=profile).values_list("id", flat=True))
+
+    pending_count = 0
+    if include_pending:
+        active_emails = {
+            email.strip().lower()
+            for email in User.objects.filter(id__in=user_ids)
+            .exclude(email__isnull=True)
+            .values_list("email", flat=True)
+            if email
+        }
+        pending_emails = {
+            email.strip().lower()
+            for email in CompanyInvitation.objects.filter(
+                profile=profile,
+                status=CompanyInvitation.InvitationStatus.PENDING,
+                expires_at__gt=timezone.now(),
+            ).values_list("email", flat=True)
+            if email and email.strip().lower() not in active_emails
+        }
+        pending_count = len(pending_emails)
+    return len(user_ids) + pending_count
+
+
+def _enforce_staff_limit(profile, *, include_pending=True):
+    from subapps.services.subscription_entitlements import enforce_subscription_limit
+
+    return enforce_subscription_limit(
+        profile_id=profile.id,
+        feature="staff-users",
+        usage=_staff_usage(profile, include_pending=include_pending),
+    )
 
 
 class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
@@ -153,6 +229,14 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             end_date=serializer.validated_data.get("end_date"),
             assigned_by=request.user,
         )
+        transaction.on_commit(
+            lambda: publish_role_assignment_changed(
+                actor=build_actor(request=request, user=request.user),
+                assignment=assignment,
+                event_name="identity.role_assignment.created",
+                summary=f"{assignment.role.name} access was assigned to {user_display_name(assignment.user)}.",
+            )
+        )
         return Response(
             StaffAssignmentSerializer(assignment).data,
             status=status.HTTP_201_CREATED,
@@ -192,6 +276,7 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             user_id=user_id,
             is_active=True,
         )
+        assignments = list(assignments_qs.select_related("user", "role", "profile"))
         had_assignments = assignments_qs.exists()
 
         if membership is None and not had_assignments:
@@ -205,12 +290,51 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             assignments_qs.update(is_active=False, end_date=now)
 
         if membership:
+            membership_before = {
+                "role": membership.role,
+                "is_active": membership.is_active,
+                "permissions": _permission_codes(membership.custom_permissions.all()),
+            }
             membership.is_active = False
             membership.save(update_fields=["is_active", "updated_at"])
+            transaction.on_commit(
+                lambda: publish_membership_changed(
+                    actor=build_actor(request=request, user=request.user),
+                    membership=membership,
+                    event_name="identity.membership.deactivated",
+                    summary=f"Workspace membership deactivated for {user_display_name(user)}.",
+                    severity="warning",
+                    before=membership_before,
+                )
+            )
 
         groups = StaffGroup.objects.filter(profile=profile, users__id=user.id)
+        before_groups = _group_names(groups)
         for group in groups:
             group.users.remove(user)
+
+        transaction.on_commit(
+            lambda: [
+                publish_role_assignment_changed(
+                    actor=build_actor(request=request, user=request.user),
+                    assignment=assignment,
+                    event_name="identity.role_assignment.deleted",
+                    summary=f"{assignment.role.name} assignment was removed from {user_display_name(assignment.user)}.",
+                    severity="warning",
+                )
+                for assignment in assignments
+            ]
+        )
+        if before_groups:
+            transaction.on_commit(
+                lambda: publish_user_groups_updated(
+                    profile=profile,
+                    actor=build_actor(request=request, user=request.user),
+                    user=user,
+                    before_groups=before_groups,
+                    after_groups=[],
+                )
+            )
 
         return Response(
             {
@@ -341,6 +465,7 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         role = serializer.validated_data.get("role", CompanyMembership.MembershipRole.MEMBER)
         if role == CompanyMembership.MembershipRole.OWNER:
             raise PermissionDenied("Owner invitations are not allowed.")
+        _enforce_staff_limit(profile)
         serializer.save(profile=profile, invited_by=self.request.user)
 
     @staticmethod
@@ -432,6 +557,7 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             self._send_invitation_email(request, existing_pending)
             return Response(self.get_serializer(existing_pending).data, status=status.HTTP_200_OK)
 
+        _enforce_staff_limit(profile)
         expires_days = getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2)
         invitation = CompanyInvitation.objects.create(
             profile=profile,
@@ -442,6 +568,14 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             expires_at=timezone.now() + timedelta(days=expires_days),
         )
         self._send_invitation_email(request, invitation)
+        transaction.on_commit(
+            lambda: publish_invitation_changed(
+                actor=build_actor(request=request, user=request.user),
+                invitation=invitation,
+                event_name="identity.invitation.created",
+                summary=f"Workspace invitation created for {invitation.email}.",
+            )
+        )
         return Response(self.get_serializer(invitation).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"], url_path="invite-bulk")
@@ -530,8 +664,21 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             if existing and existing.expires_at > now:
                 existing_pending.append(existing)
                 self._send_invitation_email(request, existing)
+                transaction.on_commit(
+                    lambda invitation=existing: publish_invitation_changed(
+                        actor=build_actor(request=request, user=request.user),
+                        invitation=invitation,
+                        event_name="identity.invitation.resent",
+                        summary=f"Workspace invitation resent to {invitation.email}.",
+                    )
+                )
                 continue
 
+            try:
+                _enforce_staff_limit(profile)
+            except PermissionDenied:
+                skipped.append({"email": email, "reason": "subscription_limit_reached"})
+                continue
             invitation = CompanyInvitation.objects.create(
                 profile=profile,
                 email=email,
@@ -542,6 +689,14 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             )
             created_invites.append(invitation)
             self._send_invitation_email(request, invitation)
+            transaction.on_commit(
+                lambda invitation=invitation: publish_invitation_changed(
+                    actor=build_actor(request=request, user=request.user),
+                    invitation=invitation,
+                    event_name="identity.invitation.created",
+                    summary=f"Workspace invitation created for {invitation.email}.",
+                )
+            )
 
         return Response(
             {
@@ -582,11 +737,24 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(request)
         if not profile or profile.id != invitation.profile_id:
             raise PermissionDenied("Invitation does not belong to your active profile.")
+        before = {
+            "status": invitation.status,
+            "expires_at": invitation.expires_at.isoformat() if invitation.expires_at else "",
+        }
         expires_days = getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2)
         invitation.status = CompanyInvitation.InvitationStatus.PENDING
         invitation.expires_at = timezone.now() + timedelta(days=expires_days)
         invitation.save(update_fields=["status", "expires_at", "updated_at"])
         self._send_invitation_email(request, invitation)
+        transaction.on_commit(
+            lambda: publish_invitation_changed(
+                actor=build_actor(request=request, user=request.user),
+                invitation=invitation,
+                event_name="identity.invitation.resent",
+                summary=f"Workspace invitation resent to {invitation.email}.",
+                before=before,
+            )
+        )
         return Response(self.get_serializer(invitation).data)
 
     @action(detail=True, methods=["post"], url_path="revoke")
@@ -595,9 +763,23 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(request)
         if not profile or profile.id != invitation.profile_id:
             raise PermissionDenied("Invitation does not belong to your active profile.")
+        before = {
+            "status": invitation.status,
+            "responded_at": invitation.responded_at.isoformat() if invitation.responded_at else "",
+        }
         invitation.status = CompanyInvitation.InvitationStatus.REVOKED
         invitation.responded_at = timezone.now()
         invitation.save(update_fields=["status", "responded_at", "updated_at"])
+        transaction.on_commit(
+            lambda: publish_invitation_changed(
+                actor=build_actor(request=request, user=request.user),
+                invitation=invitation,
+                event_name="identity.invitation.revoked",
+                summary=f"Workspace invitation revoked for {invitation.email}.",
+                severity="warning",
+                before=before,
+            )
+        )
         return Response(self.get_serializer(invitation).data)
 
     @action(detail=False, methods=["post"], url_path="accept")
@@ -631,6 +813,8 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        _enforce_staff_limit(invitation.profile, include_pending=False)
+
         membership, created = CompanyMembership.objects.get_or_create(
             user=request.user,
             profile=invitation.profile,
@@ -640,6 +824,11 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 "invited_by": invitation.invited_by,
             },
         )
+        membership_before = {
+            "role": membership.role,
+            "is_active": membership.is_active,
+            "permissions": _permission_codes(membership.custom_permissions.all()),
+        }
         if not created:
             membership.role = invitation.role
             membership.is_active = True
@@ -647,6 +836,10 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 membership.invited_by = invitation.invited_by
             membership.save(update_fields=["role", "is_active", "invited_by", "updated_at"])
 
+        invitation_before = {
+            "status": invitation.status,
+            "accepted_by_user_id": str(invitation.accepted_by_id or ""),
+        }
         invitation.status = CompanyInvitation.InvitationStatus.ACCEPTED
         invitation.accepted_by = request.user
         invitation.responded_at = timezone.now()
@@ -655,6 +848,25 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         if not request.user.profile_id:
             request.user.profile = invitation.profile
             request.user.save(update_fields=["profile"])
+
+        transaction.on_commit(
+            lambda: publish_invitation_changed(
+                actor=build_actor(request=request, user=request.user),
+                invitation=invitation,
+                event_name="identity.invitation.accepted",
+                summary=f"Workspace invitation accepted by {request.user.email}.",
+                before=invitation_before,
+            )
+        )
+        transaction.on_commit(
+            lambda: publish_membership_changed(
+                actor=build_actor(request=request, user=request.user),
+                membership=membership,
+                event_name="identity.membership.activated" if created or not membership_before["is_active"] else "identity.membership.updated",
+                summary=f"Workspace membership activated for {user_display_name(request.user)}.",
+                before=membership_before,
+            )
+        )
 
         return Response(
             {
@@ -689,11 +901,305 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        before = {
+            "status": invitation.status,
+            "accepted_by_user_id": str(invitation.accepted_by_id or ""),
+        }
         invitation.status = CompanyInvitation.InvitationStatus.DECLINED
         invitation.responded_at = timezone.now()
         invitation.accepted_by = request.user
         invitation.save(update_fields=["status", "responded_at", "accepted_by", "updated_at"])
+        transaction.on_commit(
+            lambda: publish_invitation_changed(
+                actor=build_actor(request=request, user=request.user),
+                invitation=invitation,
+                event_name="identity.invitation.declined",
+                summary=f"Workspace invitation declined by {request.user.email}.",
+                severity="warning",
+                before=before,
+            )
+        )
         return Response({"detail": "Invitation declined."}, status=status.HTTP_200_OK)
+
+
+class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
+    queryset = SupportAccessGrant.objects.select_related(
+        "profile",
+        "grantee_user",
+        "created_by",
+        "approved_by",
+        "revoked_by",
+    ).prefetch_related("custom_permissions")
+    permission_classes = [IsAuthenticated, HasModelRequestPermission]
+    required_permission = {
+        "list": "read_support_access_grant",
+        "retrieve": "read_support_access_grant",
+        "create": "create_support_access_grant",
+        "extend": "update_support_access_grant",
+        "revoke": "revoke_support_access_grant",
+        "presets": "read_support_access_grant",
+        "support_users": "create_support_access_grant",
+        "mine": "read_support_access_grant",
+    }
+    filterset_fields = ["permission_mode", "membership_role", "status", "ticket_reference"]
+    search_fields = ["grantee_email_snapshot", "reason", "ticket_reference", "grantee_user__email"]
+    ordering_fields = ["created_at", "starts_at", "expires_at", "updated_at"]
+    ordering = ["-created_at"]
+
+    def get_permissions(self):
+        if self.action in {"mine", "accept", "decline"}:
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.action == "mine":
+            expire_support_grants(user=self.request.user)
+            return queryset.filter(
+                grantee_email_snapshot__iexact=self.request.user.email,
+                status=SupportAccessGrant.Status.PENDING,
+            ).order_by(*self.ordering)
+
+        profile = _profile_from_request(self.request)
+        expire_support_grants(profile=profile)
+        return queryset.filter(profile=profile).order_by(*self.ordering)
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return SupportAccessGrantCreateSerializer
+        return SupportAccessGrantSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.action not in {"mine", "accept", "decline"}:
+            context["profile"] = _profile_from_request(self.request)
+        return context
+
+    @staticmethod
+    def _merge_notes(existing_notes, new_note, *, actor_email):
+        note = (new_note or "").strip()
+        if not note:
+            return existing_notes
+        stamped_note = f"[{timezone.now().isoformat()}] {actor_email}: {note}"
+        if not existing_notes:
+            return stamped_note
+        return f"{existing_notes}\n{stamped_note}"
+
+    def create(self, request, *args, **kwargs):
+        from subapps.services.subscription_entitlements import enforce_subscription_limit
+
+        profile = _profile_from_request(request)
+        enforce_subscription_limit(
+            profile_id=profile.id,
+            feature="support-access",
+            usage=0,
+        )
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        grant = serializer.save()
+        self._send_support_access_request_email(grant)
+        publish_support_access_grant_created(grant, actor=build_actor(request=request, user=request.user))
+        return Response(
+            SupportAccessGrantSerializer(grant, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @staticmethod
+    def _build_support_access_accept_url(grant):
+        template = getattr(settings, "SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE", "").strip()
+        if not template:
+            site_url = getattr(settings, "SITE_URL", "").strip().rstrip("/")
+            if not site_url:
+                return ""
+            return f"{site_url}/accounts/support-access/{quote(grant.invitation_code, safe='')}"
+        try:
+            return template.format(code=grant.invitation_code)
+        except (IndexError, KeyError, ValueError):
+            return template
+
+    def _send_support_access_request_email(self, grant):
+        requester_email = grant.created_by.email if grant.created_by_id else "a workspace administrator"
+        preset = get_support_access_preset(grant.permission_mode)
+        send_html_email(
+            subject=f"Temporary support access request for {grant.profile.name}",
+            message=grant.reason.strip() or f"{requester_email} requested temporary access for {grant.profile.name}.",
+            to_email=[grant.grantee_email_snapshot],
+            html_file="emails/support_access_request.html",
+            context={
+                "company_name": grant.profile.name,
+                "requester_email": requester_email,
+                "recipient_email": grant.grantee_email_snapshot,
+                "reason": grant.reason.strip(),
+                "ticket_reference": grant.ticket_reference,
+                "preset_name": preset.name if preset else grant.permission_mode,
+                "permission_mode": grant.permission_mode,
+                "membership_role": grant.get_membership_role_display(),
+                "starts_at": grant.starts_at,
+                "expires_at": grant.expires_at,
+                "accept_url": self._build_support_access_accept_url(grant),
+                "invitation_code": grant.invitation_code,
+                "is_registered_user": bool(grant.grantee_user_id),
+            },
+        )
+
+    @action(detail=False, methods=["get"], url_path="presets")
+    def presets(self, request):
+        return Response(serialize_support_access_presets(), status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="mine")
+    def mine(self, request):
+        grants = self.get_queryset()
+        return Response(SupportAccessGrantSerializer(grants, many=True).data)
+
+    @action(detail=False, methods=["get"], url_path="support-users")
+    def support_users(self, request):
+        query = (request.query_params.get("q") or "").strip()
+        profile = _profile_from_request(request)
+        if len(query) < 2:
+            return Response([], status=status.HTTP_200_OK)
+
+        users = (
+            User.objects.filter(is_active=True)
+            .filter(
+                Q(email__icontains=query)
+                | Q(first_name__icontains=query)
+                | Q(last_name__icontains=query)
+            )
+            .exclude(
+                Q(id=profile.owner_id)
+                | Q(company_memberships__profile=profile, company_memberships__is_active=True)
+            )
+            .distinct()
+            .order_by("email")[:20]
+        )
+        return Response(MyUserSerializer(users, many=True).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="revoke")
+    def revoke(self, request, pk=None):
+        grant = self.get_object()
+        serializer = SupportAccessGrantRevokeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        if grant.current_status == SupportAccessGrant.Status.REVOKED:
+            return Response(
+                SupportAccessGrantSerializer(grant, context=self.get_serializer_context()).data,
+                status=status.HTTP_200_OK,
+            )
+
+        grant.notes = self._merge_notes(
+            grant.notes,
+            serializer.validated_data.get("notes"),
+            actor_email=request.user.email,
+        )
+        grant.revoke(revoked_by=request.user)
+        if "notes" in serializer.validated_data and serializer.validated_data.get("notes", "").strip():
+            grant.save(update_fields=["notes", "updated_at"])
+        publish_support_access_grant_revoked(grant, actor=build_actor(request=request, user=request.user))
+
+        return Response(SupportAccessGrantSerializer(grant, context=self.get_serializer_context()).data)
+
+    @action(detail=False, methods=["post"], url_path="accept")
+    def accept(self, request):
+        serializer = SupportAccessGrantRespondSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        code = serializer.validated_data["invitation_code"].strip()
+        grant = SupportAccessGrant.objects.filter(invitation_code=code).first()
+        if not grant:
+            return Response({"detail": "Invalid support access request code."}, status=status.HTTP_400_BAD_REQUEST)
+
+        request_email = request.user.email.strip().lower()
+        if request_email != grant.grantee_email_snapshot.strip().lower():
+            return Response(
+                {"detail": "Authenticated user email does not match the support access request email."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if grant.grantee_user_id and grant.grantee_user_id != request.user.id:
+            return Response(
+                {"detail": "Support access request is reserved for a different account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if grant.current_status != SupportAccessGrant.Status.PENDING:
+            return Response({"detail": "Support access request is not pending."}, status=status.HTTP_400_BAD_REQUEST)
+        if grant.expires_at and grant.expires_at < timezone.now():
+            grant.status = SupportAccessGrant.Status.EXPIRED
+            grant.responded_at = timezone.now()
+            grant.save(update_fields=["status", "responded_at", "updated_at"])
+            return Response({"detail": "Support access request has expired."}, status=status.HTTP_400_BAD_REQUEST)
+        if user_has_direct_profile_access(request.user, grant.profile):
+            return Response(
+                {"detail": "This account already has direct access to the workspace."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        grant.grantee_user = request.user
+        grant.accepted_by = request.user
+        grant.responded_at = timezone.now()
+        grant.save()
+        publish_support_access_grant_activated(
+            grant,
+            actor=build_actor(request=request, user=request.user, role=grant.membership_role),
+        )
+        return Response(
+            {
+                "support_access_grant_id": str(grant.id),
+                "profile_id": str(grant.profile_id),
+                "status": grant.current_status,
+                "starts_at": grant.starts_at.isoformat() if grant.starts_at else None,
+                "expires_at": grant.expires_at.isoformat() if grant.expires_at else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["post"], url_path="decline")
+    def decline(self, request):
+        serializer = SupportAccessGrantRespondSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        code = serializer.validated_data["invitation_code"].strip()
+        grant = SupportAccessGrant.objects.filter(invitation_code=code).first()
+        if not grant:
+            return Response({"detail": "Invalid support access request code."}, status=status.HTTP_400_BAD_REQUEST)
+
+        request_email = request.user.email.strip().lower()
+        if request_email != grant.grantee_email_snapshot.strip().lower():
+            return Response(
+                {"detail": "Authenticated user email does not match the support access request email."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if grant.grantee_user_id and grant.grantee_user_id != request.user.id:
+            return Response(
+                {"detail": "Support access request is reserved for a different account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if grant.current_status != SupportAccessGrant.Status.PENDING:
+            return Response({"detail": "Support access request is not pending."}, status=status.HTTP_400_BAD_REQUEST)
+
+        grant.accepted_by = request.user
+        grant.responded_at = timezone.now()
+        grant.status = SupportAccessGrant.Status.DECLINED
+        grant.save(update_fields=["accepted_by", "responded_at", "status", "updated_at"])
+        publish_support_access_grant_declined(
+            grant,
+            actor=build_actor(request=request, user=request.user, role=grant.membership_role),
+        )
+        return Response({"detail": "Support access request declined."}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="extend")
+    def extend(self, request, pk=None):
+        grant = self.get_object()
+        serializer = SupportAccessGrantExtendSerializer(data=request.data, context={"grant": grant})
+        serializer.is_valid(raise_exception=True)
+
+        grant.expires_at = serializer.validated_data["expires_at"]
+        grant.notes = self._merge_notes(
+            grant.notes,
+            serializer.validated_data.get("notes"),
+            actor_email=request.user.email,
+        )
+        if grant.approved_by_id is None:
+            grant.approved_by = request.user
+        grant.save()
+        publish_support_access_grant_extended(grant, actor=build_actor(request=request, user=request.user))
+        return Response(SupportAccessGrantSerializer(grant, context=self.get_serializer_context()).data)
 
 
 class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
@@ -729,7 +1235,58 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(self.request)
         if not profile:
             raise PermissionDenied("No company profile is linked to this account.")
-        serializer.save(profile=profile, created_by=self.request.user)
+        role = serializer.save(profile=profile, created_by=self.request.user)
+        transaction.on_commit(
+            lambda: publish_role_changed(
+                actor=build_actor(request=self.request, user=self.request.user),
+                role=role,
+                event_name="identity.role.created",
+                summary=f"Role {role.name} was created.",
+            )
+        )
+
+    def perform_update(self, serializer):
+        role = self.get_object()
+        before = {
+            "role_name": role.name,
+            "description": role.description or "",
+            "is_active": role.is_active,
+        }
+        updated_role = serializer.save()
+        after = {
+            "role_name": updated_role.name,
+            "description": updated_role.description or "",
+            "is_active": updated_role.is_active,
+        }
+        transaction.on_commit(
+            lambda: publish_role_changed(
+                actor=build_actor(request=self.request, user=self.request.user),
+                role=updated_role,
+                event_name="identity.role.updated",
+                summary=f"Role {updated_role.name} was updated.",
+                before=before,
+                after=after,
+            )
+        )
+
+    def perform_destroy(self, instance):
+        actor = build_actor(request=self.request, user=self.request.user)
+        transaction.on_commit(
+            lambda: publish_role_changed(
+                actor=actor,
+                role=instance,
+                event_name="identity.role.deleted",
+                summary=f"Role {instance.name} was deleted.",
+                severity="warning",
+                before={
+                    "role_name": instance.name,
+                    "description": instance.description or "",
+                    "is_active": instance.is_active,
+                },
+                after={},
+            )
+        )
+        instance.delete()
 
     @action(detail=True, methods=["get"])
     def assignments(self, request, pk=None):
@@ -751,6 +1308,14 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             start_date=serializer.validated_data.get("start_date", timezone.now()),
             end_date=serializer.validated_data.get("end_date"),
             assigned_by=request.user,
+        )
+        transaction.on_commit(
+            lambda: publish_role_assignment_changed(
+                actor=build_actor(request=request, user=request.user),
+                assignment=assignment,
+                event_name="identity.role_assignment.created",
+                summary=f"{assignment.role.name} access was assigned to {user_display_name(assignment.user)}.",
+            )
         )
         return Response(
             StaffAssignmentSerializer(assignment).data,
@@ -788,7 +1353,39 @@ class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet)
         if requested_profile and requested_profile.id != profile.id:
             raise PermissionDenied("Cross-profile assignment is not allowed.")
 
-        serializer.save(profile=profile, assigned_by=self.request.user)
+        assignment = serializer.save(profile=profile, assigned_by=self.request.user)
+        transaction.on_commit(
+            lambda: publish_role_assignment_changed(
+                actor=build_actor(request=self.request, user=self.request.user),
+                assignment=assignment,
+                event_name="identity.role_assignment.created",
+                summary=f"{assignment.role.name} access was assigned to {user_display_name(assignment.user)}.",
+            )
+        )
+
+    def perform_update(self, serializer):
+        assignment = serializer.save()
+        transaction.on_commit(
+            lambda: publish_role_assignment_changed(
+                actor=build_actor(request=self.request, user=self.request.user),
+                assignment=assignment,
+                event_name="identity.role_assignment.updated",
+                summary=f"{assignment.role.name} assignment was updated for {user_display_name(assignment.user)}.",
+            )
+        )
+
+    def perform_destroy(self, instance):
+        actor = build_actor(request=self.request, user=self.request.user)
+        transaction.on_commit(
+            lambda: publish_role_assignment_changed(
+                actor=actor,
+                assignment=instance,
+                event_name="identity.role_assignment.deleted",
+                summary=f"{instance.role.name} assignment was removed from {user_display_name(instance.user)}.",
+                severity="warning",
+            )
+        )
+        instance.delete()
 
     @action(detail=True, methods=["post"])
     def deactivate(self, request, pk=None):
@@ -796,6 +1393,15 @@ class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet)
         assignment.is_active = False
         assignment.end_date = timezone.now()
         assignment.save(update_fields=["is_active", "end_date"])
+        transaction.on_commit(
+            lambda: publish_role_assignment_changed(
+                actor=build_actor(request=request, user=request.user),
+                assignment=assignment,
+                event_name="identity.role_assignment.deactivated",
+                summary=f"{assignment.role.name} assignment was deactivated for {user_display_name(assignment.user)}.",
+                severity="warning",
+            )
+        )
         return Response({"detail": "Role assignment deactivated successfully"})
 
 
@@ -832,7 +1438,58 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(self.request)
         if not profile:
             raise PermissionDenied("No company profile is linked to this account.")
-        serializer.save(profile=profile, created_by=self.request.user)
+        group = serializer.save(profile=profile, created_by=self.request.user)
+        transaction.on_commit(
+            lambda: publish_group_changed(
+                actor=build_actor(request=self.request, user=self.request.user),
+                group=group,
+                event_name="identity.group.created",
+                summary=f"Group {group.name} was created.",
+            )
+        )
+
+    def perform_update(self, serializer):
+        group = self.get_object()
+        before = {
+            "group_name": group.name,
+            "description": group.description or "",
+            "is_active": group.is_active,
+        }
+        updated_group = serializer.save()
+        after = {
+            "group_name": updated_group.name,
+            "description": updated_group.description or "",
+            "is_active": updated_group.is_active,
+        }
+        transaction.on_commit(
+            lambda: publish_group_changed(
+                actor=build_actor(request=self.request, user=self.request.user),
+                group=updated_group,
+                event_name="identity.group.updated",
+                summary=f"Group {updated_group.name} was updated.",
+                before=before,
+                after=after,
+            )
+        )
+
+    def perform_destroy(self, instance):
+        actor = build_actor(request=self.request, user=self.request.user)
+        transaction.on_commit(
+            lambda: publish_group_changed(
+                actor=actor,
+                group=instance,
+                event_name="identity.group.deleted",
+                summary=f"Group {instance.name} was deleted.",
+                severity="warning",
+                before={
+                    "group_name": instance.name,
+                    "description": instance.description or "",
+                    "is_active": instance.is_active,
+                },
+                after={},
+            )
+        )
+        instance.delete()
 
     @action(detail=True, methods=["get"])
     def users(self, request, pk=None):
@@ -867,7 +1524,18 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 {"error": "User does not belong to this profile"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        before_groups = _group_names(user.staff_groups.filter(profile=group.profile))
         group.users.add(user)
+        after_groups = _group_names(user.staff_groups.filter(profile=group.profile))
+        transaction.on_commit(
+            lambda: publish_user_groups_updated(
+                profile=group.profile,
+                actor=build_actor(request=request, user=request.user),
+                user=user,
+                before_groups=before_groups,
+                after_groups=after_groups,
+            )
+        )
         return Response({"message": "User added to group successfully"})
 
     @action(detail=True, methods=["post"])
@@ -897,7 +1565,18 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 {"error": "User does not belong to this profile"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        before_groups = _group_names(user.staff_groups.filter(profile=group.profile))
         group.users.remove(user)
+        after_groups = _group_names(user.staff_groups.filter(profile=group.profile))
+        transaction.on_commit(
+            lambda: publish_user_groups_updated(
+                profile=group.profile,
+                actor=build_actor(request=request, user=request.user),
+                user=user,
+                before_groups=before_groups,
+                after_groups=after_groups,
+            )
+        )
         return Response({"message": "User removed from group successfully"})
 
 

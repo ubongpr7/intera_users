@@ -11,11 +11,17 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer as BaseT
 
 from djoser.social.serializers import ProviderAuthSerializer
 from mainapps.profile.models import CompanyMembership, CompanyProfile
+from mainapps.profile.support_access import (
+    list_accessible_profile_contexts,
+    resolve_profile_access,
+)
+from subapps.kafka.producers import build_actor, publish_support_access_workspace_entered
 
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
-    profile_id = serializers.UUIDField(required=False, write_only=True)
+    profile_id = serializers.IntegerField(required=False, write_only=True)
     company_code = serializers.CharField(required=False, write_only=True, allow_blank=True)
+    support_access_grant_id = serializers.UUIDField(required=False, write_only=True)
 
     @classmethod
     def _active_memberships(cls, user):
@@ -27,27 +33,24 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     @classmethod
     def user_has_profile_access(cls, user, profile):
-        if not profile:
-            return False
-        if profile.owner_id == user.id:
-            return True
-        return CompanyMembership.objects.filter(
-            user=user,
-            profile=profile,
-            is_active=True,
-        ).exists()
+        return bool(resolve_profile_access(user, profile_id=getattr(profile, "id", None)).profile)
+
+    @classmethod
+    def list_accessible_profile_contexts(cls, user):
+        return list_accessible_profile_contexts(user)
 
     @classmethod
     def list_accessible_profiles(cls, user):
-        profiles_by_id = {}
-        for owned in cls._owned_profiles(user):
-            profiles_by_id[str(owned.id)] = owned
-        for membership in cls._active_memberships(user):
-            profiles_by_id[str(membership.profile_id)] = membership.profile
-        return list(profiles_by_id.values())
+        return [context.profile for context in cls.list_accessible_profile_contexts(user)]
 
     @classmethod
-    def resolve_active_profile(cls, user, profile_id=None, company_code=None):
+    def resolve_active_profile_access(
+        cls,
+        user,
+        profile_id=None,
+        company_code=None,
+        support_access_grant_id=None,
+    ):
         requested_profile = None
         if profile_id:
             requested_profile = CompanyProfile.objects.filter(id=profile_id).first()
@@ -58,25 +61,36 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             if not requested_profile:
                 raise serializers.ValidationError({"company_code": "Invalid company code."})
 
-        if requested_profile:
-            if not cls.user_has_profile_access(user, requested_profile):
-                raise serializers.ValidationError(
-                    {"profile_id": "You do not have access to the requested company profile."}
-                )
-            return requested_profile
-
-        if user.profile_id:
-            current_profile = CompanyProfile.objects.filter(id=user.profile_id).first()
-            if current_profile and cls.user_has_profile_access(user, current_profile):
-                return current_profile
-
-        profiles = cls.list_accessible_profiles(user)
-        if len(profiles) == 1:
-            return profiles[0]
-        return None
+        access = resolve_profile_access(
+            user,
+            profile_id=profile_id,
+            company_code=company_code,
+            support_access_grant_id=support_access_grant_id,
+        )
+        if support_access_grant_id and not access.support_grant:
+            raise serializers.ValidationError(
+                {"support_access_grant_id": "Support access grant is invalid, expired, or revoked."}
+            )
+        if requested_profile and not access.profile:
+            raise serializers.ValidationError(
+                {"profile_id": "You do not have access to the requested company profile."}
+            )
+        return access
 
     @classmethod
-    def get_all_permissions(cls, user, profile=None):
+    def resolve_active_profile(cls, user, profile_id=None, company_code=None, support_access_grant_id=None):
+        return cls.resolve_active_profile_access(
+            user,
+            profile_id=profile_id,
+            company_code=company_code,
+            support_access_grant_id=support_access_grant_id,
+        ).profile
+
+    @classmethod
+    def get_all_permissions(cls, user, profile=None, support_grant=None):
+        if support_grant is not None:
+            return support_grant.effective_permission_codenames()
+
         user_perms = set()
         user_perms.update(user.custom_permissions.all().values_list("codename", flat=True))
         if not profile:
@@ -113,10 +127,13 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         return sorted(user_perms)
 
     @classmethod
-    def _profile_payload(cls, profile, user):
+    def _profile_payload(cls, profile, user, support_grant=None):
         if not profile:
             return None
-        if profile.owner_id == user.id:
+        if support_grant is not None:
+            role = support_grant.membership_role
+            membership_id = None
+        elif profile.owner_id == user.id:
             role = CompanyMembership.MembershipRole.OWNER
             membership_id = None
         else:
@@ -137,11 +154,16 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             "currency": profile.currency,
             "role": role,
             "membership_id": membership_id,
+            "support_access": support_grant is not None,
+            "support_access_grant_id": str(support_grant.id) if support_grant else None,
+            "support_access_expires_at": support_grant.expires_at.isoformat() if support_grant else None,
+            "support_access_mode": support_grant.permission_mode if support_grant else None,
+            "support_actor_type": "support" if support_grant else "workspace_member",
         }
 
     @classmethod
-    def _apply_claims(cls, token, user, profile):
-        token["permissions"] = cls.get_all_permissions(user, profile=profile)
+    def _apply_claims(cls, token, user, profile, support_grant=None):
+        token["permissions"] = cls.get_all_permissions(user, profile=profile, support_grant=support_grant)
         token["profile_id"] = str(profile.id) if profile else None
         token["company_code"] = profile.company_code if profile else None
         token["profile_industry"] = profile.industry if profile else None
@@ -151,7 +173,9 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["owner_id"] = str(profile.owner_id) if profile and profile.owner_id else None
 
         role = None
-        if profile:
+        if support_grant is not None:
+            role = support_grant.membership_role
+        elif profile:
             if profile.owner_id == user.id:
                 role = CompanyMembership.MembershipRole.OWNER
             else:
@@ -162,56 +186,92 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
                 ).only("role").first()
                 role = membership.role if membership else None
         token["membership_role"] = role
+        token["support_access_grant_id"] = str(support_grant.id) if support_grant else None
+        token["support_access_expires_at"] = (
+            support_grant.expires_at.isoformat() if support_grant else None
+        )
+        token["support_access_scope"] = (
+            support_grant.effective_permission_codenames() if support_grant else None
+        )
+        token["support_access_mode"] = support_grant.permission_mode if support_grant else None
+        token["support_actor_type"] = "support" if support_grant else "workspace_member"
 
         token["mfa_verified"] = bool(getattr(user, "_jwt_mfa_verified", False))
 
     @classmethod
-    def issue_tokens_for_profile(cls, user, profile, mfa_verified=False):
+    def issue_tokens_for_profile(cls, user, profile, mfa_verified=False, support_grant=None):
         setattr(user, "_jwt_active_profile", profile)
         setattr(user, "_jwt_mfa_verified", bool(mfa_verified))
+        setattr(user, "_jwt_support_grant", support_grant)
         try:
             refresh = cls.get_token(user)
             access = refresh.access_token
+            if support_grant is not None:
+                support_grant.mark_used()
             return refresh, access
         finally:
             if hasattr(user, "_jwt_active_profile"):
                 delattr(user, "_jwt_active_profile")
             if hasattr(user, "_jwt_mfa_verified"):
                 delattr(user, "_jwt_mfa_verified")
+            if hasattr(user, "_jwt_support_grant"):
+                delattr(user, "_jwt_support_grant")
 
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
         profile = getattr(user, "_jwt_active_profile", None)
+        support_grant = getattr(user, "_jwt_support_grant", None)
         if profile is None and user.profile_id:
-            profile = CompanyProfile.objects.filter(id=user.profile_id).first()
-        cls._apply_claims(token, user, profile)
+            access = cls.resolve_active_profile_access(user, profile_id=user.profile_id)
+            profile = access.profile
+            support_grant = access.support_grant
+        cls._apply_claims(token, user, profile, support_grant=support_grant)
         return token
 
     def validate(self, attrs):
         data = super().validate(attrs)
         user = self.user
-        profile = self.resolve_active_profile(
+        access = self.resolve_active_profile_access(
             user,
             profile_id=attrs.get("profile_id"),
             company_code=(attrs.get("company_code") or "").strip() or None,
+            support_access_grant_id=attrs.get("support_access_grant_id"),
         )
+        profile = access.profile
         if profile and user.profile_id != profile.id:
             User.objects.filter(id=user.id).update(profile=profile)
             user.profile = profile
 
-        refresh, access = self.issue_tokens_for_profile(user, profile, mfa_verified=False)
+        refresh, access_token = self.issue_tokens_for_profile(
+            user,
+            profile,
+            mfa_verified=False,
+            support_grant=access.support_grant,
+        )
+        if access.support_grant is not None:
+            publish_support_access_workspace_entered(
+                access.support_grant,
+                actor=build_actor(
+                    request=self.context.get("request"),
+                    user=user,
+                    role=access.support_grant.membership_role,
+                ),
+            )
         data["refresh"] = str(refresh)
-        data["access"] = str(access)
+        data["access"] = str(access_token)
 
-        accessible_profiles = self.list_accessible_profiles(user)
+        accessible_profiles = self.list_accessible_profile_contexts(user)
         data.update({
             "id": user.id,
             "username": user.username,
             "is_verified": getattr(user, "is_verified", False),
             "profile": str(profile.id) if profile else None,
-            "profile_context": self._profile_payload(profile, user),
-            "profiles": [self._profile_payload(item, user) for item in accessible_profiles],
+            "profile_context": self._profile_payload(profile, user, support_grant=access.support_grant),
+            "profiles": [
+                self._profile_payload(item.profile, user, support_grant=item.support_grant)
+                for item in accessible_profiles
+            ],
             "currency": profile.currency if profile else None,
             "email": user.email,
             "first_name": getattr(user, "first_name", ""),
@@ -235,8 +295,12 @@ class SocialJWTSerializer(ProviderAuthSerializer):
 
     def create(self, validated_data):
         user = validated_data["user"]
-        profile = MyTokenObtainPairSerializer.resolve_active_profile(user)
-        refresh, access = MyTokenObtainPairSerializer.issue_tokens_for_profile(user, profile)
+        profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(user)
+        refresh, access = MyTokenObtainPairSerializer.issue_tokens_for_profile(
+            user,
+            profile_access.profile,
+            support_grant=profile_access.support_grant,
+        )
         return {
             "user": user,
             "refresh": str(refresh),
@@ -266,44 +330,67 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
         if not user or not user.is_authenticated:
             return data
 
-        active_profile = None
+        active_access = None
         mfa_verified_claim = False
         if raw_refresh:
             try:
                 refresh_payload = RefreshToken(raw_refresh)
                 mfa_verified_claim = bool(refresh_payload.get("mfa_verified"))
                 profile_id = refresh_payload.get("profile_id")
-                if profile_id:
-                    active_profile = CompanyProfile.objects.filter(id=profile_id).first()
-                    if active_profile and not MyTokenObtainPairSerializer.user_has_profile_access(user, active_profile):
-                        active_profile = None
+                support_access_grant_id = refresh_payload.get("support_access_grant_id")
+                if support_access_grant_id:
+                    active_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
+                        user,
+                        profile_id=profile_id if profile_id else None,
+                        support_access_grant_id=support_access_grant_id,
+                    )
+                    if not active_access.profile or not active_access.support_grant:
+                        raise serializers.ValidationError(
+                            {"detail": "Support access grant is no longer active for this workspace."}
+                        )
+                elif profile_id:
+                    active_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
+                        user,
+                        profile_id=profile_id,
+                    )
+            except serializers.ValidationError:
+                raise
             except Exception:
-                active_profile = None
+                active_access = None
                 mfa_verified_claim = False
 
-        if not active_profile:
-            active_profile = MyTokenObtainPairSerializer.resolve_active_profile(user)
+        if not active_access:
+            active_access = MyTokenObtainPairSerializer.resolve_active_profile_access(user)
 
-        mfa_verified = bool(active_profile and mfa_verified_claim)
+        mfa_verified = bool(active_access.profile and mfa_verified_claim)
         custom_refresh, custom_access = MyTokenObtainPairSerializer.issue_tokens_for_profile(
             user,
-            active_profile,
+            active_access.profile,
             mfa_verified=mfa_verified,
+            support_grant=active_access.support_grant,
         )
         data["access"] = str(custom_access)
         if "refresh" in data:
             data["refresh"] = str(custom_refresh)
 
-        profile = active_profile
+        profile = active_access.profile
         data.update({
             'id': user.id,
             'username': user.username,
             'is_verified': getattr(user, 'is_verified', False),
             'profile': str(profile.id) if profile else None,
-            'profile_context': MyTokenObtainPairSerializer._profile_payload(profile, user),
+            'profile_context': MyTokenObtainPairSerializer._profile_payload(
+                profile,
+                user,
+                support_grant=active_access.support_grant,
+            ),
             'profiles': [
-                MyTokenObtainPairSerializer._profile_payload(item, user)
-                for item in MyTokenObtainPairSerializer.list_accessible_profiles(user)
+                MyTokenObtainPairSerializer._profile_payload(
+                    item.profile,
+                    user,
+                    support_grant=item.support_grant,
+                )
+                for item in MyTokenObtainPairSerializer.list_accessible_profile_contexts(user)
             ],
             'currency': profile.currency if profile else None,
             'email': user.email,
@@ -469,8 +556,9 @@ class TenantManagedUserCreateSerializer(serializers.Serializer):
         return user
 
 class CompanyContextSwitchSerializer(serializers.Serializer):
-    profile_id = serializers.UUIDField(required=False)
+    profile_id = serializers.IntegerField(required=False)
     company_code = serializers.CharField(required=False, allow_blank=True)
+    support_access_grant_id = serializers.UUIDField(required=False)
 
     def validate(self, attrs):
         profile_id = attrs.get("profile_id")

@@ -5,7 +5,7 @@ import uuid
 from cryptography.fernet import Fernet
 from django.db import models
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy as __
 from django.contrib.contenttypes.fields import GenericRelation
@@ -749,6 +749,193 @@ class CompanyMembership(models.Model):
         return f"{self.user_id}:{self.profile_id}:{self.role}"
 
 
+def generate_support_access_invitation_code():
+    return secrets.token_urlsafe(24)[:32]
+
+
+class SupportAccessGrant(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        ACTIVE = "active", _("Active")
+        DECLINED = "declined", _("Declined")
+        EXPIRED = "expired", _("Expired")
+        REVOKED = "revoked", _("Revoked")
+        CONSUMED = "consumed", _("Consumed")
+
+    class MembershipRole(models.TextChoices):
+        ADMIN = CompanyMembership.MembershipRole.ADMIN, _("Admin")
+        MEMBER = CompanyMembership.MembershipRole.MEMBER, _("Member")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    profile = models.ForeignKey(
+        CompanyProfile,
+        on_delete=models.CASCADE,
+        related_name="support_access_grants",
+    )
+    grantee_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="support_access_grants_received",
+        null=True,
+        blank=True,
+    )
+    accepted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="support_access_grants_accepted",
+        null=True,
+        blank=True,
+    )
+    grantee_email_snapshot = models.EmailField()
+    invitation_code = models.CharField(
+        max_length=48,
+        unique=True,
+        default=generate_support_access_invitation_code,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="support_access_grants_created",
+        null=True,
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="support_access_grants_approved",
+        null=True,
+        blank=True,
+    )
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="support_access_grants_revoked",
+        null=True,
+        blank=True,
+    )
+    reason = models.TextField()
+    ticket_reference = models.CharField(max_length=120, blank=True, null=True, db_index=True)
+    permission_mode = models.CharField(max_length=64)
+    membership_role = models.CharField(
+        max_length=20,
+        choices=MembershipRole.choices,
+        default=MembershipRole.MEMBER,
+    )
+    custom_permissions = models.ManyToManyField(
+        CustomUserPermission,
+        related_name="support_access_grants",
+        blank=True,
+    )
+    starts_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["profile", "status"]),
+            models.Index(fields=["grantee_user", "status"]),
+            models.Index(fields=["expires_at", "status"]),
+        ]
+
+    def __str__(self):
+        return f"{self.profile_id}:{self.grantee_email_snapshot}:{self.permission_mode}:{self.status}"
+
+    @property
+    def current_status(self):
+        return self._computed_status()
+
+    @property
+    def is_active_now(self):
+        return self.current_status == self.Status.ACTIVE
+
+    def _computed_status(self):
+        now = timezone.now()
+        if self.revoked_at:
+            return self.Status.REVOKED
+        if self.status == self.Status.CONSUMED:
+            return self.Status.CONSUMED
+        if self.status == self.Status.DECLINED:
+            return self.Status.DECLINED
+        if self.expires_at and self.expires_at <= now:
+            return self.Status.EXPIRED
+        if not self.accepted_by_id:
+            return self.Status.PENDING
+        if self.starts_at and self.starts_at > now:
+            return self.Status.PENDING
+        return self.Status.ACTIVE
+
+    def refresh_status(self, *, save=True):
+        computed_status = self._computed_status()
+        if save and self.status != computed_status:
+            self.status = computed_status
+            self.save(update_fields=["status", "updated_at"])
+        return computed_status
+
+    def effective_permission_codenames(self):
+        from .support_access_presets import get_support_access_preset
+
+        preset = get_support_access_preset(self.permission_mode)
+        permission_codenames = set(preset.permissions if preset else ())
+        permission_codenames.update(self.custom_permissions.values_list("codename", flat=True))
+        return sorted(permission_codenames)
+
+    def mark_used(self):
+        self.last_used_at = timezone.now()
+        self.save(update_fields=["last_used_at", "updated_at"])
+
+    def revoke(self, *, revoked_by=None):
+        self.revoked_at = timezone.now()
+        self.revoked_by = revoked_by
+        if self.responded_at is None:
+            self.responded_at = self.revoked_at
+        self.status = self.Status.REVOKED
+        self.save(update_fields=["revoked_at", "revoked_by", "responded_at", "status", "updated_at"])
+
+    def clean(self):
+        from .support_access_presets import get_support_access_preset
+
+        if self.membership_role == CompanyMembership.MembershipRole.OWNER:
+            raise ValidationError({"membership_role": "Support access cannot assign the owner role."})
+        if not get_support_access_preset(self.permission_mode):
+            raise ValidationError({"permission_mode": "Unsupported support access preset."})
+        if not self.grantee_email_snapshot:
+            raise ValidationError({"grantee_email_snapshot": "A recipient email is required."})
+        if self.expires_at <= self.starts_at:
+            raise ValidationError({"expires_at": "Expiry must be after the start time."})
+
+        overlapping_grants = SupportAccessGrant.objects.filter(
+            profile=self.profile,
+            revoked_at__isnull=True,
+            grantee_email_snapshot__iexact=self.grantee_email_snapshot,
+            starts_at__lt=self.expires_at,
+            expires_at__gt=self.starts_at,
+        ).exclude(id=self.id)
+        if overlapping_grants.exclude(
+            status__in=[self.Status.CONSUMED, self.Status.DECLINED]
+        ).exists():
+            raise ValidationError(
+                {"non_field_errors": ["An overlapping support access request already exists for this email and workspace."]}
+            )
+
+        self.status = self._computed_status()
+
+    def save(self, *args, **kwargs):
+        if self.grantee_user_id and not self.grantee_email_snapshot:
+            self.grantee_email_snapshot = self.grantee_user.email
+        if self.grantee_email_snapshot:
+            self.grantee_email_snapshot = self.grantee_email_snapshot.strip().lower()
+        self.full_clean()
+        super().save(*args, **kwargs)
 def generate_company_invitation_code():
     return secrets.token_urlsafe(18)[:24]
 

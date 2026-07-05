@@ -68,6 +68,10 @@ def get_request_company_code(request):
     return get_request_claim(request, "company_code")
 
 
+def get_request_support_access_grant_id(request):
+    return get_request_claim(request, "support_access_grant_id")
+
+
 def get_request_email(request):
     return get_request_claim(request, "email")
 
