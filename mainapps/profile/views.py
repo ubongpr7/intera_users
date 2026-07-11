@@ -1,4 +1,6 @@
 import csv
+import os
+import secrets
 from datetime import timedelta
 from io import StringIO
 from urllib.parse import quote
@@ -17,6 +19,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from mainapps.accounts.api.serializers import MyUserSerializer
 from mainapps.common.settings import get_company_or_profile
@@ -145,6 +148,26 @@ def _enforce_staff_limit(profile, *, include_pending=True):
         feature="staff-users",
         usage=_staff_usage(profile, include_pending=include_pending),
     )
+
+
+def _require_subscription_service_key(request):
+    expected = os.getenv("SUBSCRIPTION_SERVICE_KEY", "")
+    supplied = request.headers.get("X-Intera-Service-Key", "")
+    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+        raise PermissionDenied("Invalid subscription service key.")
+
+
+class InternalSubscriptionUsageView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        _require_subscription_service_key(request)
+        profile_id = request.query_params.get("profile_id")
+        profile = CompanyProfile.objects.filter(id=profile_id).first()
+        if not profile:
+            return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"staff-users": _staff_usage(profile)})
 
 
 class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):

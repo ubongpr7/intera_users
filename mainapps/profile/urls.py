@@ -12,6 +12,7 @@ from .views import (
     StaffGroupViewSet,
     CompanyProfileAddressViewSet,
     SupportAccessGrantViewSet,
+    InternalSubscriptionUsageView,
 )
 
 router = DefaultRouter()
@@ -31,6 +32,7 @@ router.register(r'reorder-strategies', ReorderStrategyViewSet, basename='reorder
 router.register(r'inventory-policies', InventoryPolicyViewSet, basename='inventory-policy')
 
 urlpatterns = [
+    path('internal/subscription-usage/', InternalSubscriptionUsageView.as_view(), name='internal-subscription-usage'),
     path('', include(router.urls)),
     path(
         'roles/<str:pk>/deactivate/',

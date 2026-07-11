@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -35,6 +36,8 @@ from mainapps.profile.models import CompanyInvitation, CompanyMembership, Compan
 from mainapps.profile import payloads as profile_payloads
 from mainapps.profile.views import CompanyInvitationViewSet, CompanyProfileViewSet, StaffGroupViewSet, StaffRoleViewSet
 from subapps.utils.request_context import coerce_identity_id
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_bool(value: str | None, *, default: bool = False) -> bool:
@@ -381,6 +384,138 @@ def _search_company_staff_sync(
         "limit": limit,
         "profile_id": profile_id,
         "results": [_staff_payload(user, active_profile_id=profile_id) for user in users],
+    }
+
+
+def _staff_queryset_for_profile(*, profile_id: int):
+    return (
+        User.objects.filter(
+            Q(profile_id=profile_id) | Q(company_memberships__profile_id=profile_id, company_memberships__is_active=True)
+        )
+        .prefetch_related(
+            Prefetch(
+                "roles",
+                queryset=StaffRoleAssignment.objects.filter(is_active=True, role__profile_id=profile_id)
+                .select_related("role")
+                .prefetch_related("role__permissions"),
+                to_attr="active_role_assignments_for_mcp_detail",
+            ),
+            Prefetch(
+                "staff_groups",
+                queryset=StaffGroup.objects.filter(profile_id=profile_id, is_active=True).prefetch_related("permissions"),
+                to_attr="active_staff_groups_for_mcp_detail",
+            ),
+            Prefetch(
+                "company_memberships",
+                queryset=CompanyMembership.objects.filter(profile_id=profile_id, is_active=True).prefetch_related(
+                    "custom_permissions"
+                ),
+                to_attr="profile_memberships_for_mcp_detail",
+            ),
+        )
+        .distinct()
+    )
+
+
+def _get_staff_profile_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    user_id: str,
+) -> dict[str, Any]:
+    active_profile = _accessible_profile_queryset(principal=principal).filter(id=principal.profile_id).first()
+    if active_profile is None:
+        raise RuntimeError("Authenticated profile_id is not accessible to the caller.")
+
+    target_user = _staff_queryset_for_profile(profile_id=principal.profile_id).filter(id=user_id).first()
+    if target_user is None:
+        raise ValueError("User not found.")
+
+    membership = next(
+        (item for item in getattr(target_user, "profile_memberships_for_mcp_detail", []) if item.profile_id == principal.profile_id),
+        None,
+    )
+    role_assignments = getattr(target_user, "active_role_assignments_for_mcp_detail", [])
+    groups = getattr(target_user, "active_staff_groups_for_mcp_detail", [])
+    custom_permissions = sorted(
+        permission.codename for permission in (membership.custom_permissions.all() if membership else [])
+    )
+
+    return {
+        "profile_id": principal.profile_id,
+        "staff": _staff_payload(target_user, active_profile_id=principal.profile_id),
+        "membership": {
+            "profile_id": str(principal.profile_id),
+            "workspace_role": getattr(membership, "role", None),
+            "joined_at": membership.created_at.isoformat() if membership and membership.created_at else None,
+            "custom_permissions": custom_permissions,
+        },
+        "roles": [
+            {
+                "id": str(assignment.role_id),
+                "name": assignment.role.name,
+                "permissions": sorted(permission.codename for permission in assignment.role.permissions.all()),
+            }
+            for assignment in role_assignments
+            if assignment.role_id
+        ],
+        "groups": [
+            {
+                "id": str(group.id),
+                "name": group.name,
+                "permissions": sorted(permission.codename for permission in group.permissions.all()),
+            }
+            for group in groups
+        ],
+    }
+
+
+def _get_role_assignments_sync(
+    *,
+    principal: UsersMcpPrincipal,
+    user_id: str,
+) -> dict[str, Any]:
+    profile = _accessible_profile_queryset(principal=principal).filter(id=principal.profile_id).first()
+    if profile is None:
+        raise RuntimeError("Authenticated profile_id is not accessible to the caller.")
+
+    target_user = _staff_queryset_for_profile(profile_id=principal.profile_id).filter(id=user_id).first()
+    if target_user is None:
+        raise ValueError("User not found.")
+
+    role_assignments = getattr(target_user, "active_role_assignments_for_mcp_detail", [])
+    groups = getattr(target_user, "active_staff_groups_for_mcp_detail", [])
+
+    role_rows = [
+        {
+            "role_id": str(assignment.role_id),
+            "role_name": assignment.role.name,
+            "permissions": sorted(permission.codename for permission in assignment.role.permissions.all()),
+        }
+        for assignment in role_assignments
+        if assignment.role_id
+    ]
+    group_rows = [
+        {
+            "group_id": str(group.id),
+            "group_name": group.name,
+            "permissions": sorted(permission.codename for permission in group.permissions.all()),
+        }
+        for group in groups
+    ]
+    effective_permissions = sorted(
+        {
+            permission
+            for row in [*role_rows, *group_rows]
+            for permission in row["permissions"]
+        }
+    )
+    return {
+        "profile_id": principal.profile_id,
+        "user_id": str(target_user.id),
+        "email": target_user.email,
+        "role_assignments": role_rows,
+        "group_assignments": group_rows,
+        "effective_permissions": effective_permissions,
     }
 
 
@@ -751,8 +886,16 @@ async def list_accessible_company_profiles(
     description="Get the active company workspace resolved from the authenticated caller's profile_id claim.",
 )
 async def get_active_company_profile() -> profile_payloads.ActiveCompanyProfileResponsePayload:
-    principal = get_current_principal(required=True)
-    return await sync_to_async(_get_active_company_profile_sync, thread_sensitive=True)(principal=principal)
+    try:
+        principal = get_current_principal(required=True)
+        return await sync_to_async(_get_active_company_profile_sync, thread_sensitive=True)(principal=principal)
+    except Exception:
+        logger.exception(
+            "users mcp get_active_company_profile failed profile_id=%s user_id=%s",
+            getattr(get_current_principal(required=False), "profile_id", None),
+            getattr(get_current_principal(required=False), "user_id", None),
+        )
+        raise
 
 
 @mcp.tool(
@@ -771,6 +914,36 @@ async def search_company_staff(
         query=query,
         limit=limit_value,
         include_inactive=include_inactive,
+    )
+
+
+@mcp.tool(
+    name="get_staff_profile",
+    description="Get a staff member profile, membership, roles, and groups for the active company workspace.",
+)
+async def get_staff_profile(user_id: str) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_user_id = str(user_id or "").strip()
+    if not target_user_id:
+        raise ValueError("user_id is required")
+    return await sync_to_async(_get_staff_profile_sync, thread_sensitive=True)(
+        principal=principal,
+        user_id=target_user_id,
+    )
+
+
+@mcp.tool(
+    name="get_role_assignments",
+    description="Get role and group assignments for a staff member in the active company workspace.",
+)
+async def get_role_assignments(user_id: str) -> dict[str, Any]:
+    principal = get_current_principal(required=True)
+    target_user_id = str(user_id or "").strip()
+    if not target_user_id:
+        raise ValueError("user_id is required")
+    return await sync_to_async(_get_role_assignments_sync, thread_sensitive=True)(
+        principal=principal,
+        user_id=target_user_id,
     )
 
 

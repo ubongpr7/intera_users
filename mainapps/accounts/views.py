@@ -80,6 +80,8 @@ def _build_auth_payload(user, profile, refresh, access, *, support_grant=None):
         "id": user.id,
         "username": user.username,
         "is_verified": getattr(user, "is_verified", False),
+        "is_staff": bool(user.is_staff),
+        "is_superuser": bool(user.is_superuser),
         "profile": str(profile.id) if profile else None,
         "profile_context": MyTokenObtainPairSerializer._profile_payload(
             profile,
@@ -119,6 +121,72 @@ def _get_request_support_grant(request):
         .filter(id=support_access_grant_id)
         .first()
     )
+
+
+def _issue_email_verification_code(user, *, subject, message):
+    code, _ = VerificationCode.objects.get_or_create(user=user)
+    code.regenerate()
+    send_html_email(
+        subject=subject,
+        message=message.format(code=code.code),
+        to_email=[user.email],
+        html_file='accounts/verify.html'
+    )
+    return code
+
+
+def _consume_email_verification_code(user, code_input):
+    verification_code = VerificationCode.objects.filter(user=user).first()
+    if not verification_code or not verification_code.is_valid():
+        return False
+
+    if str(verification_code.code) != code_input.strip():
+        verification_code.mark_failed_attempt()
+        return False
+
+    verification_code.mark_successful_attempt()
+    verification_code.regenerate()
+    return True
+
+
+def _build_mfa_verified_response(request, user):
+    auth = getattr(request, "auth", None)
+    token_profile_id = None
+    token_support_grant_id = None
+    if auth is not None and hasattr(auth, "payload"):
+        token_profile_id = auth.payload.get("profile_id")
+        token_support_grant_id = auth.payload.get("support_access_grant_id")
+    profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
+        user,
+        profile_id=token_profile_id if token_profile_id else None,
+        support_access_grant_id=token_support_grant_id,
+    )
+    profile = profile_access.profile
+    if profile and user.profile_id != profile.id:
+        User.objects.filter(id=user.id).update(profile=profile)
+        user.profile = profile
+
+    refresh, access = MyTokenObtainPairSerializer.issue_tokens_for_profile(
+        user,
+        profile,
+        mfa_verified=True,
+        support_grant=profile_access.support_grant,
+    )
+    payload = _build_auth_payload(
+        user,
+        profile,
+        refresh,
+        access,
+        support_grant=profile_access.support_grant,
+    )
+    payload.update({
+        "detail": "MFA verified successfully.",
+        "mfa_enabled": True,
+        "has_setup_mfa": user.has_setup_mfa,
+    })
+    response = Response(payload, status=status.HTTP_200_OK)
+    _set_session_cookies(response, access_token=str(access), refresh_token=str(refresh))
+    return response
 
 
 
@@ -255,13 +323,10 @@ class VerificationAPI(APIView):
         
         user = User.objects.filter(email=email).first()
         if user:
-            code, _ = VerificationCode.objects.get_or_create(user=user)
-            code.regenerate()
-            send_html_email(
+            _issue_email_verification_code(
+                user,
                 subject='Your Verification Code',
-                message=f'Use this code to verify your login: {code.code}',
-                to_email=[user.email],
-                html_file='accounts/verify.html'
+                message='Use this code to verify your login: {code}',
             )
 
         return Response(
@@ -284,16 +349,8 @@ class VerificationAPI(APIView):
         if not user:
             return Response({"error": "Invalid or expired verification code"}, status=status.HTTP_400_BAD_REQUEST)
 
-        verification_code = VerificationCode.objects.filter(user=user).first()
-        if not verification_code or not verification_code.is_valid():
+        if not _consume_email_verification_code(user, code_input):
             return Response({"error": "Invalid or expired verification code"}, status=status.HTTP_400_BAD_REQUEST)
-
-        if str(verification_code.code) != code_input.strip():
-            verification_code.mark_failed_attempt()
-            return Response({"error": "Invalid or expired verification code"}, status=status.HTTP_400_BAD_REQUEST)
-
-        verification_code.mark_successful_attempt()
-        verification_code.regenerate()
         return Response(
             {
                 "message": "Verification successful",
@@ -444,6 +501,7 @@ class CompanyMembershipListView(APIView):
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = MyTokenObtainPairSerializer
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
@@ -514,7 +572,7 @@ class MfaSetupView(APIView):
         user = get_user_model().objects.get(id=request.user.id)
         force = str(request.data.get('force', '')).strip().lower() in {'1', 'true', 'yes'}
 
-        if user.mfa_enabled and not force and user.has_setup_mfa:
+        if user.mfa_enabled and user.has_setup_mfa:
             return Response(
                 {"detail": "MFA is already enabled for this account."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -523,7 +581,8 @@ class MfaSetupView(APIView):
         if force or not user.mfa_secret:
             user.mfa_secret = pyotp.random_base32()
             user.mfa_enabled = False
-            user.save(update_fields=['mfa_secret', 'mfa_enabled'])
+            user.has_setup_mfa = False
+            user.save(update_fields=['mfa_secret', 'mfa_enabled', 'has_setup_mfa'])
 
         issuer = getattr(settings, "MFA_ISSUER", "Intera")
         totp = pyotp.TOTP(user.mfa_secret)
@@ -576,43 +635,101 @@ class MfaVerifyView(APIView):
             user.mfa_enabled = True
             user.has_setup_mfa = True
             user.save(update_fields=['mfa_enabled', 'has_setup_mfa'])
-        auth = getattr(request, "auth", None)
-        token_profile_id = None
-        token_support_grant_id = None
-        if auth is not None and hasattr(auth, "payload"):
-            token_profile_id = auth.payload.get("profile_id")
-            token_support_grant_id = auth.payload.get("support_access_grant_id")
-        profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
-            user,
-            profile_id=token_profile_id if token_profile_id else None,
-            support_access_grant_id=token_support_grant_id,
-        )
-        profile = profile_access.profile
-        if profile and user.profile_id != profile.id:
-            User.objects.filter(id=user.id).update(profile=profile)
-            user.profile = profile
+        return _build_mfa_verified_response(request, user)
 
-        refresh, access = MyTokenObtainPairSerializer.issue_tokens_for_profile(
+
+class MfaEmailRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = get_user_model().objects.get(id=request.user.id)
+        _issue_email_verification_code(
             user,
-            profile,
-            mfa_verified=True,
-            support_grant=profile_access.support_grant,
+            subject='Your Login Verification Code',
+            message='Use this code to complete sign in: {code}',
         )
-        payload = _build_auth_payload(
+        return Response(
+            {
+                "detail": "A login verification code has been sent to your email.",
+                "email": user.email,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class MfaEmailVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = get_user_model().objects.get(id=request.user.id)
+        code = (request.data.get('code') or '').strip()
+
+        if not code:
+            return Response(
+                {"detail": "Verification code is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not _consume_email_verification_code(user, code):
+            return Response(
+                {"detail": "Invalid or expired verification code."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return _build_mfa_verified_response(request, user)
+
+
+class MfaResetRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = get_user_model().objects.get(id=request.user.id)
+        _issue_email_verification_code(
             user,
-            profile,
-            refresh,
-            access,
-            support_grant=profile_access.support_grant,
+            subject='Your MFA Reset Code',
+            message='Use this code to reset your MFA setup: {code}',
         )
-        payload.update({
-            "detail": "MFA verified successfully.",
-            "mfa_enabled": True,
-            "has_setup_mfa": user.has_setup_mfa,
-        })
-        response = Response(payload, status=status.HTTP_200_OK)
-        _set_session_cookies(response, access_token=str(access), refresh_token=str(refresh))
-        return response
+        return Response(
+            {
+                "detail": "A recovery code has been sent to your email.",
+                "email": user.email,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class MfaResetConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = get_user_model().objects.get(id=request.user.id)
+        code = (request.data.get('code') or '').strip()
+
+        if not code:
+            return Response(
+                {"detail": "Recovery code is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not _consume_email_verification_code(user, code):
+            return Response(
+                {"detail": "Invalid or expired recovery code."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user.mfa_secret = None
+        user.mfa_enabled = False
+        user.has_setup_mfa = False
+        user.save(update_fields=['mfa_secret', 'mfa_enabled', 'has_setup_mfa'])
+
+        return Response(
+            {
+                "detail": "MFA reset confirmed. Set up a new authenticator app to continue.",
+                "mfa_enabled": False,
+                "has_setup_mfa": False,
+            },
+            status=status.HTTP_200_OK
+        )
 
 
 class MfaToggleView(APIView):

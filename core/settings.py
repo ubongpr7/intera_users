@@ -319,6 +319,7 @@ SIMPLE_JWT = {
     'JWK_URL': os.getenv("JWT_JWK_URL") or None,
     'LEEWAY': 0,
     "TOKEN_OBTAIN_SERIALIZER": "mainapps.accounts.serializers.MyTokenObtainPairSerializer",
+    "TOKEN_REFRESH_SERIALIZER": "mainapps.accounts.serializers.TokenRefreshSerializer",
 
     'AUTH_HEADER_TYPES': ('Bearer',),
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',

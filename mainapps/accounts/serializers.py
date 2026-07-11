@@ -168,6 +168,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["company_code"] = profile.company_code if profile else None
         token["profile_industry"] = profile.industry if profile else None
         token["email"] = user.email
+        token["is_staff"] = bool(user.is_staff)
+        token["is_superuser"] = bool(user.is_superuser)
         token["mfa_enabled"] = bool(getattr(user, "mfa_enabled", False))
         token["has_setup_mfa"] = bool(getattr(user, "has_setup_mfa", False))
         token["owner_id"] = str(profile.owner_id) if profile and profile.owner_id else None
@@ -266,6 +268,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             "id": user.id,
             "username": user.username,
             "is_verified": getattr(user, "is_verified", False),
+            "is_staff": bool(user.is_staff),
+            "is_superuser": bool(user.is_superuser),
             "profile": str(profile.id) if profile else None,
             "profile_context": self._profile_payload(profile, user, support_grant=access.support_grant),
             "profiles": [
@@ -305,6 +309,28 @@ class SocialJWTSerializer(ProviderAuthSerializer):
             "user": user,
             "refresh": str(refresh),
             "access": str(access),
+            "id": user.id,
+            "username": user.username,
+            "is_verified": getattr(user, "is_verified", False),
+            "is_staff": bool(user.is_staff),
+            "is_superuser": bool(user.is_superuser),
+            "profile": str(profile_access.profile.id) if profile_access.profile else None,
+            "profile_context": self._profile_payload(
+                profile_access.profile,
+                user,
+                support_grant=profile_access.support_grant,
+            ),
+            "profiles": [
+                self._profile_payload(
+                    item.profile,
+                    user,
+                    support_grant=item.support_grant,
+                )
+                for item in self.list_accessible_profile_contexts(user)
+            ],
+            "currency": profile_access.profile.currency if profile_access.profile else None,
+            "email": user.email,
+            "first_name": getattr(user, "first_name", ""),
         }
 
 
@@ -378,6 +404,8 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
             'id': user.id,
             'username': user.username,
             'is_verified': getattr(user, 'is_verified', False),
+            'is_staff': bool(user.is_staff),
+            'is_superuser': bool(user.is_superuser),
             'profile': str(profile.id) if profile else None,
             'profile_context': MyTokenObtainPairSerializer._profile_payload(
                 profile,

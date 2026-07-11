@@ -12,8 +12,10 @@ class AccountJWTAuthentication(JWTAuthentication):
         "/auth/logout/",
         "/auth/companies/",
         "/auth/switch-company/",
+        "/accounts/mfa/email/",
         "/accounts/mfa/setup/",
         "/accounts/mfa/verify/",
+        "/accounts/mfa/reset/",
         "/accounts/mfa/toggle/",
         "/accounts/verify/",
     )

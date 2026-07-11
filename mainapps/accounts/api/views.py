@@ -160,6 +160,8 @@ class UserReadOnlyView(viewsets.ReadOnlyModelViewSet):
 
 
 class TokenGenerator(TokenObtainPairView):
+    serializer_class = MyTokenObtainPairSerializer
+
     def post(self, request: Request, *args, **kwargs)  :
         email = request.data.get('email') or request.data.get('username')
         password = request.data.get('password')
