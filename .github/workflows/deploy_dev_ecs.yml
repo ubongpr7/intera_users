@@ -37,6 +37,7 @@ jobs:
           test -f .aws/ecs/task-definitions.json
           python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           manifest = json.loads(Path('.aws/ecs/task-definitions.json').read_text())
@@ -44,11 +45,11 @@ jobs:
           if not isinstance(targets, dict) or not targets:
               raise SystemExit('Manifest must define at least one ECS target.')
 
-          deploy_targets = json.loads(Path('/dev/stdin').read_text())
+          deploy_targets = json.loads(os.environ['ECS_DEPLOY_TARGETS'])
           missing = [item['target'] for item in deploy_targets if item['target'] not in targets]
           if missing:
               raise SystemExit(f'Manifest is missing deploy targets: {missing}')
-          PY <<<"$ECS_DEPLOY_TARGETS"
+          PY
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
