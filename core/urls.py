@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import path,include
 from django.urls import re_path
 from rest_framework import permissions
@@ -24,8 +25,13 @@ schema_view = get_schema_view(
    permission_classes=(permissions.AllowAny,),
 )
 
+
+def healthz(_request):
+    return JsonResponse({"status": "ok"})
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('healthz/', healthz, name='healthz'),
     path('djoser/', include('djoser.urls'), name='djoser_users'),
     path('auth/', include("mainapps.accounts.jwt_urls")),
     path('accounts/', include("mainapps.accounts.urls")),
