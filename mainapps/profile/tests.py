@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from http import HTTPStatus
 
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import UntypedToken
@@ -161,14 +161,16 @@ class CompanyInvitationActionTests(TestCase):
         self.auth_token = SimpleNamespace(payload={"profile_id": self.profile.id})
         self.client.force_authenticate(user=self.user, token=self.auth_token)
 
+    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test")
     @patch("mainapps.profile.views.send_html_email")
     @patch("mainapps.profile.views.publish_invitation_changed")
     def test_invite_sends_company_invitation_email(self, publish_invitation_changed_mock, send_html_email_mock):
-        response = self.client.post(
-            "/management/invitations/invite/",
-            {"email": "invitee@example.com", "role": "member"},
-            format="json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/management/invitations/invite/",
+                {"email": "invitee@example.com", "role": "member"},
+                format="json",
+            )
 
         self.assertEqual(response.status_code, HTTPStatus.CREATED)
         invitation = CompanyInvitation.objects.get(email="invitee@example.com")
@@ -180,6 +182,39 @@ class CompanyInvitationActionTests(TestCase):
             send_html_email_mock.call_args.kwargs["html_file"],
             "emails/company_invitation.html",
         )
+        self.assertEqual(
+            send_html_email_mock.call_args.kwargs["context"]["accept_url"],
+            f"https://app.interaims.test/accounts/invitations/{invitation.invitation_code}",
+        )
+
+    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test")
+    def test_invite_notifies_registered_user(self):
+        invitee = User.objects.create_user(
+            email="invitee@example.com",
+            password="password123",
+            first_name="Registered",
+            last_name="Invitee",
+        )
+
+        with (
+            patch("mainapps.profile.views.send_html_email") as send_html_email_mock,
+            patch("mainapps.profile.views.publish_invitation_changed") as publish_invitation_changed_mock,
+            patch("mainapps.profile.views.publish_invitation_notification") as publish_invitation_notification_mock,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    "/management/invitations/invite/",
+                    {"email": "invitee@example.com", "role": "member"},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, HTTPStatus.CREATED)
+        self.assertEqual(publish_invitation_changed_mock.call_count, 1)
+        self.assertEqual(publish_invitation_notification_mock.call_count, 1)
+        notification_kwargs = publish_invitation_notification_mock.call_args.kwargs
+        self.assertEqual(notification_kwargs["event_name"], "notification.identity.invitation.sent")
+        self.assertIn("/accounts/invitations/", notification_kwargs["action_url"])
+        send_html_email_mock.assert_called_once()
 
     @patch("mainapps.profile.views.send_html_email")
     @patch("mainapps.profile.views.publish_invitation_changed")
@@ -192,11 +227,12 @@ class CompanyInvitationActionTests(TestCase):
             expires_at=timezone.now() + timedelta(days=1),
         )
 
-        response = self.client.post(
-            "/management/invitations/invite/",
-            {"email": "invitee@example.com", "role": "member"},
-            format="json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/management/invitations/invite/",
+                {"email": "invitee@example.com", "role": "member"},
+                format="json",
+            )
 
         self.assertEqual(response.status_code, HTTPStatus.OK)
         self.assertEqual(CompanyInvitation.objects.filter(email="invitee@example.com").count(), 1)
@@ -214,13 +250,48 @@ class CompanyInvitationActionTests(TestCase):
             expires_at=timezone.now() - timedelta(hours=1),
         )
 
-        response = self.client.post(f"/management/invitations/{invitation.id}/resend/")
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(f"/management/invitations/{invitation.id}/resend/")
 
         self.assertEqual(response.status_code, HTTPStatus.OK)
         invitation.refresh_from_db()
         self.assertEqual(invitation.status, CompanyInvitation.InvitationStatus.PENDING)
         send_html_email_mock.assert_called_once()
         publish_invitation_changed_mock.assert_called_once()
+
+    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test")
+    def test_resend_action_notifies_registered_user(self):
+        invitee = User.objects.create_user(
+            email="invitee@example.com",
+            password="password123",
+            first_name="Registered",
+            last_name="Invitee",
+        )
+        invitation = CompanyInvitation.objects.create(
+            profile=self.profile,
+            email=invitee.email,
+            role="member",
+            invited_by=self.user,
+            expires_at=timezone.now() - timedelta(hours=1),
+        )
+
+        with (
+            patch("mainapps.profile.views.send_html_email") as send_html_email_mock,
+            patch("mainapps.profile.views.publish_invitation_changed") as publish_invitation_changed_mock,
+            patch("mainapps.profile.views.publish_invitation_notification") as publish_invitation_notification_mock,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(f"/management/invitations/{invitation.id}/resend/")
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, CompanyInvitation.InvitationStatus.PENDING)
+        self.assertEqual(publish_invitation_changed_mock.call_count, 1)
+        self.assertEqual(publish_invitation_notification_mock.call_count, 1)
+        notification_kwargs = publish_invitation_notification_mock.call_args.kwargs
+        self.assertEqual(notification_kwargs["event_name"], "notification.identity.invitation.resent")
+        self.assertIn("/accounts/invitations/", notification_kwargs["action_url"])
+        send_html_email_mock.assert_called_once()
 
     @patch("mainapps.profile.views.publish_membership_changed")
     @patch("mainapps.profile.views.publish_invitation_changed")
@@ -244,11 +315,12 @@ class CompanyInvitationActionTests(TestCase):
         )
 
         self.client.force_authenticate(user=invitee, token=SimpleNamespace(payload={}))
-        response = self.client.post(
-            "/management/invitations/accept/",
-            {"invitation_code": invitation.invitation_code},
-            format="json",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/management/invitations/accept/",
+                {"invitation_code": invitation.invitation_code},
+                format="json",
+            )
 
         self.assertEqual(response.status_code, HTTPStatus.OK)
         publish_invitation_changed_mock.assert_called_once()
@@ -372,6 +444,7 @@ class SupportAccessGrantTests(TestCase):
         values.update(overrides)
         return SupportAccessGrant.objects.create(**values)
 
+    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test")
     @patch("mainapps.profile.views.publish_support_access_grant_created")
     @patch("mainapps.profile.views.send_html_email")
     def test_owner_can_create_support_access_request(self, send_html_email_mock, publish_created_mock):
@@ -392,6 +465,10 @@ class SupportAccessGrantTests(TestCase):
         send_html_email_mock.assert_called_once()
         publish_created_mock.assert_called_once()
         self.assertEqual(send_html_email_mock.call_args.kwargs["html_file"], "emails/support_access_request.html")
+        self.assertEqual(
+            send_html_email_mock.call_args.kwargs["context"]["accept_url"],
+            f"https://app.interaims.test/accounts/support-access/{grant.invitation_code}",
+        )
 
     @patch("mainapps.profile.views.send_html_email")
     def test_admin_with_support_access_permission_can_create_request(self, send_html_email_mock):

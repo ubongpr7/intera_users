@@ -117,7 +117,6 @@ CORE_APPS = [
     'mainapps.common',
     'mainapps.kafka_reliability',
     'mainapps.profile',
-    'mainapps.agents',
     'mainapps.permit',
 ]
 
@@ -231,8 +230,9 @@ EMAIL_HOST_PASSWORD =os.getenv('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "noreply@interaims.com")
 COMPANY_INVITATION_EXPIRY_DAYS = int(os.getenv("COMPANY_INVITATION_EXPIRY_DAYS", "2"))
 SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
+FRONTEND_SITE_URL = os.getenv("FRONTEND_SITE_URL", SITE_URL).strip().rstrip("/")
 COMPANY_INVITATION_ACCEPT_URL_TEMPLATE = os.getenv("COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
-_frontend_site = urlparse(SITE_URL) if SITE_URL else None
+_frontend_site = urlparse(FRONTEND_SITE_URL) if FRONTEND_SITE_URL else None
 EMAIL_FRONTEND_PROTOCOL = (_frontend_site.scheme if _frontend_site and _frontend_site.scheme else "").strip() or None
 EMAIL_FRONTEND_DOMAIN = (_frontend_site.netloc if _frontend_site and _frontend_site.netloc else "").strip() or None
 

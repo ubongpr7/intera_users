@@ -217,6 +217,62 @@ def publish_invitation_changed(
     )
 
 
+def publish_invitation_notification(
+    *,
+    invitation: CompanyInvitation,
+    actor: dict,
+    event_name: str,
+    title: str,
+    message: str,
+    action_url: str,
+    severity: str = "info",
+) -> None:
+    recipient = (
+        User.objects.filter(email__iexact=invitation.email, is_active=True)
+        .only("id", "email", "first_name", "last_name")
+        .first()
+    )
+    if recipient is None:
+        return
+
+    payload = {
+        "profile_id": str(invitation.profile_id),
+        "invitation_id": str(invitation.id),
+        "invitation_code": invitation.invitation_code,
+        "email": invitation.email,
+        "role": invitation.role,
+        "status": invitation.status,
+        "user_id": str(recipient.id),
+        "user_email": recipient.email,
+        "user_name": _user_label(recipient),
+    }
+    publish_workspace_notification(
+        event_name=event_name,
+        workspace_id=str(invitation.profile_id),
+        category="workspace",
+        title=title,
+        message=message,
+        metadata=payload,
+        action_url=action_url,
+        user_ids=[str(recipient.id)],
+        key=f"{invitation.profile_id}:{invitation.id}:{event_name}",
+    )
+
+    publish_audit_fact(
+        event_name=event_name,
+        payload=payload,
+        workspace_id=str(invitation.profile_id),
+        actor=actor,
+        target={"type": "notification", "id": str(invitation.id), "label": invitation.email},
+        summary=message,
+        severity=severity,
+        metadata={"workspace_name": _profile_label(invitation.profile)},
+        changes={},
+        reference_number=_string(invitation.profile.company_code),
+        key=f"{invitation.profile_id}:{invitation.id}:{event_name}:audit",
+    )
+
+
 def publish_user_permissions_updated(
     *,
     profile: CompanyProfile,

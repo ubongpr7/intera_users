@@ -37,6 +37,7 @@ from subapps.kafka.producers.access_control import (
     _permission_codes,
     publish_group_changed,
     publish_invitation_changed,
+    publish_invitation_notification,
     publish_membership_changed,
     publish_role_assignment_changed,
     publish_role_changed,
@@ -505,11 +506,11 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @staticmethod
     def _build_invitation_accept_url(invitation):
         template = getattr(settings, "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
+        frontend_url = getattr(settings, "FRONTEND_SITE_URL", "").strip().rstrip("/")
         if not template:
-            site_url = getattr(settings, "SITE_URL", "").strip().rstrip("/")
-            if not site_url:
+            if not frontend_url:
                 return ""
-            return f"{site_url}/accounts/invitations/{quote(invitation.invitation_code, safe='')}"
+            return f"{frontend_url}/accounts/invitations/{quote(invitation.invitation_code, safe='')}"
         try:
             return template.format(code=invitation.invitation_code)
         except (IndexError, KeyError, ValueError):
@@ -537,6 +538,19 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 "accept_url": self._build_invitation_accept_url(invitation),
                 "recipient_email": invitation.email,
             },
+        )
+
+    def _publish_invitation_notification(self, request, invitation, *, event_name: str, title: str, message: str):
+        accept_url = self._build_invitation_accept_url(invitation)
+        transaction.on_commit(
+            lambda: publish_invitation_notification(
+                invitation=invitation,
+                actor=build_actor(request=request, user=request.user),
+                event_name=event_name,
+                title=title,
+                message=message,
+                action_url=accept_url,
+            )
         )
 
     @action(detail=False, methods=["post"], url_path="invite")
@@ -578,6 +592,19 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         ).first()
         if existing_pending and existing_pending.expires_at > timezone.now():
             self._send_invitation_email(request, existing_pending)
+            self._publish_invitation_notification(
+                request,
+                existing_pending,
+                event_name="notification.identity.invitation.resent",
+                title="Workspace invitation resent",
+                message=f"Your invitation to join {existing_pending.profile.name} was resent.",
+            )
+            publish_invitation_changed(
+                actor=build_actor(request=request, user=request.user),
+                invitation=existing_pending,
+                event_name="identity.invitation.resent",
+                summary=f"Workspace invitation resent to {existing_pending.email}.",
+            )
             return Response(self.get_serializer(existing_pending).data, status=status.HTTP_200_OK)
 
         _enforce_staff_limit(profile)
@@ -591,13 +618,18 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             expires_at=timezone.now() + timedelta(days=expires_days),
         )
         self._send_invitation_email(request, invitation)
-        transaction.on_commit(
-            lambda: publish_invitation_changed(
-                actor=build_actor(request=request, user=request.user),
-                invitation=invitation,
-                event_name="identity.invitation.created",
-                summary=f"Workspace invitation created for {invitation.email}.",
-            )
+        self._publish_invitation_notification(
+            request,
+            invitation,
+            event_name="notification.identity.invitation.sent",
+            title="Workspace invitation received",
+            message=f"You were invited to join {invitation.profile.name}.",
+        )
+        publish_invitation_changed(
+            actor=build_actor(request=request, user=request.user),
+            invitation=invitation,
+            event_name="identity.invitation.created",
+            summary=f"Workspace invitation created for {invitation.email}.",
         )
         return Response(self.get_serializer(invitation).data, status=status.HTTP_201_CREATED)
 
@@ -687,13 +719,18 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             if existing and existing.expires_at > now:
                 existing_pending.append(existing)
                 self._send_invitation_email(request, existing)
-                transaction.on_commit(
-                    lambda invitation=existing: publish_invitation_changed(
-                        actor=build_actor(request=request, user=request.user),
-                        invitation=invitation,
-                        event_name="identity.invitation.resent",
-                        summary=f"Workspace invitation resent to {invitation.email}.",
-                    )
+                self._publish_invitation_notification(
+                    request,
+                    existing,
+                    event_name="notification.identity.invitation.resent",
+                    title="Workspace invitation resent",
+                    message=f"Your invitation to join {existing.profile.name} was resent.",
+                )
+                publish_invitation_changed(
+                    actor=build_actor(request=request, user=request.user),
+                    invitation=existing,
+                    event_name="identity.invitation.resent",
+                    summary=f"Workspace invitation resent to {existing.email}.",
                 )
                 continue
 
@@ -712,13 +749,18 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             )
             created_invites.append(invitation)
             self._send_invitation_email(request, invitation)
-            transaction.on_commit(
-                lambda invitation=invitation: publish_invitation_changed(
-                    actor=build_actor(request=request, user=request.user),
-                    invitation=invitation,
-                    event_name="identity.invitation.created",
-                    summary=f"Workspace invitation created for {invitation.email}.",
-                )
+            self._publish_invitation_notification(
+                request,
+                invitation,
+                event_name="notification.identity.invitation.sent",
+                title="Workspace invitation received",
+                message=f"You were invited to join {invitation.profile.name}.",
+            )
+            publish_invitation_changed(
+                actor=build_actor(request=request, user=request.user),
+                invitation=invitation,
+                event_name="identity.invitation.created",
+                summary=f"Workspace invitation created for {invitation.email}.",
             )
 
         return Response(
@@ -769,14 +811,19 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         invitation.expires_at = timezone.now() + timedelta(days=expires_days)
         invitation.save(update_fields=["status", "expires_at", "updated_at"])
         self._send_invitation_email(request, invitation)
-        transaction.on_commit(
-            lambda: publish_invitation_changed(
-                actor=build_actor(request=request, user=request.user),
-                invitation=invitation,
-                event_name="identity.invitation.resent",
-                summary=f"Workspace invitation resent to {invitation.email}.",
-                before=before,
-            )
+        self._publish_invitation_notification(
+            request,
+            invitation,
+            event_name="notification.identity.invitation.resent",
+            title="Workspace invitation resent",
+            message=f"Your invitation to join {invitation.profile.name} was resent.",
+        )
+        publish_invitation_changed(
+            actor=build_actor(request=request, user=request.user),
+            invitation=invitation,
+            event_name="identity.invitation.resent",
+            summary=f"Workspace invitation resent to {invitation.email}.",
+            before=before,
         )
         return Response(self.get_serializer(invitation).data)
 
@@ -872,14 +919,12 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             request.user.profile = invitation.profile
             request.user.save(update_fields=["profile"])
 
-        transaction.on_commit(
-            lambda: publish_invitation_changed(
-                actor=build_actor(request=request, user=request.user),
-                invitation=invitation,
-                event_name="identity.invitation.accepted",
-                summary=f"Workspace invitation accepted by {request.user.email}.",
-                before=invitation_before,
-            )
+        publish_invitation_changed(
+            actor=build_actor(request=request, user=request.user),
+            invitation=invitation,
+            event_name="identity.invitation.accepted",
+            summary=f"Workspace invitation accepted by {request.user.email}.",
+            before=invitation_before,
         )
         transaction.on_commit(
             lambda: publish_membership_changed(
@@ -932,15 +977,13 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         invitation.responded_at = timezone.now()
         invitation.accepted_by = request.user
         invitation.save(update_fields=["status", "responded_at", "accepted_by", "updated_at"])
-        transaction.on_commit(
-            lambda: publish_invitation_changed(
-                actor=build_actor(request=request, user=request.user),
-                invitation=invitation,
-                event_name="identity.invitation.declined",
-                summary=f"Workspace invitation declined by {request.user.email}.",
-                severity="warning",
-                before=before,
-            )
+        publish_invitation_changed(
+            actor=build_actor(request=request, user=request.user),
+            invitation=invitation,
+            event_name="identity.invitation.declined",
+            summary=f"Workspace invitation declined by {request.user.email}.",
+            severity="warning",
+            before=before,
         )
         return Response({"detail": "Invitation declined."}, status=status.HTTP_200_OK)
 
@@ -1030,11 +1073,11 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @staticmethod
     def _build_support_access_accept_url(grant):
         template = getattr(settings, "SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE", "").strip()
+        frontend_url = getattr(settings, "FRONTEND_SITE_URL", "").strip().rstrip("/")
         if not template:
-            site_url = getattr(settings, "SITE_URL", "").strip().rstrip("/")
-            if not site_url:
+            if not frontend_url:
                 return ""
-            return f"{site_url}/accounts/support-access/{quote(grant.invitation_code, safe='')}"
+            return f"{frontend_url}/accounts/support-access/{quote(grant.invitation_code, safe='')}"
         try:
             return template.format(code=grant.invitation_code)
         except (IndexError, KeyError, ValueError):
