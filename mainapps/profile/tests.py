@@ -293,6 +293,31 @@ class CompanyInvitationActionTests(TestCase):
         self.assertIn("/accounts/invitations/", notification_kwargs["action_url"])
         send_html_email_mock.assert_called_once()
 
+    def test_resolve_invitation_exposes_registration_status(self):
+        invitee = User.objects.create_user(
+            email="invitee@example.com",
+            password="password123",
+            first_name="Registered",
+            last_name="Invitee",
+        )
+        invitation = CompanyInvitation.objects.create(
+            profile=self.profile,
+            email=invitee.email,
+            role="member",
+            invited_by=self.user,
+            expires_at=timezone.now() + timedelta(days=1),
+        )
+
+        response = self.client.get(
+            "/management/invitations/resolve/",
+            {"invitation_code": invitation.invitation_code},
+        )
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        payload = response.json()
+        self.assertEqual(payload["email"], invitee.email)
+        self.assertTrue(payload["is_registered_user"])
+
     @patch("mainapps.profile.views.publish_membership_changed")
     @patch("mainapps.profile.views.publish_invitation_changed")
     def test_accept_invitation_publishes_membership_and_invitation_events(

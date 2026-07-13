@@ -464,6 +464,8 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in {"accept", "decline", "mine"}:
             return [IsAuthenticated()]
+        if self.action == "resolve":
+            return []
         return super().get_permissions()
 
     def get_queryset(self):
@@ -795,6 +797,22 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             status=CompanyInvitation.InvitationStatus.PENDING,
         )
         return Response(self.get_serializer(invitations, many=True).data)
+
+    @action(detail=False, methods=["get"], url_path="resolve")
+    def resolve(self, request):
+        code = (request.query_params.get("invitation_code") or request.query_params.get("code") or "").strip()
+        if not code:
+            return Response({"detail": "invitation_code is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        invitation = CompanyInvitation.objects.select_related("profile", "invited_by", "accepted_by").filter(
+            invitation_code=code
+        ).first()
+        if not invitation:
+            return Response({"detail": "Invitation not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        payload = self.get_serializer(invitation).data
+        payload["is_registered_user"] = User.objects.filter(email__iexact=invitation.email, is_active=True).exists()
+        return Response(payload)
 
     @action(detail=True, methods=["post"], url_path="resend")
     def resend(self, request, pk=None):
