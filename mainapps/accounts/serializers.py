@@ -43,6 +43,24 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def list_accessible_profiles(cls, user):
         return [context.profile for context in cls.list_accessible_profile_contexts(user)]
 
+    @staticmethod
+    def _subscription_snapshot(profile):
+        snapshot = getattr(profile, "subscription_snapshot", None) or {}
+        return snapshot if isinstance(snapshot, dict) else {}
+
+    @classmethod
+    def _subscription_metadata(cls, profile):
+        snapshot = cls._subscription_snapshot(profile)
+        subscription = snapshot.get("subscription") or {}
+        plan = subscription.get("plan") or {}
+        return {
+            "profile_id": snapshot.get("profile_id"),
+            "application": snapshot.get("application"),
+            "subscription": subscription,
+            "plan": plan,
+            "plan_features": snapshot.get("features") or {},
+        }
+
     @classmethod
     def resolve_active_profile_access(
         cls,
@@ -130,6 +148,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def _profile_payload(cls, profile, user, support_grant=None):
         if not profile:
             return None
+        subscription_metadata = cls._subscription_metadata(profile)
         if support_grant is not None:
             role = support_grant.membership_role
             membership_id = None
@@ -159,6 +178,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             "support_access_expires_at": support_grant.expires_at.isoformat() if support_grant else None,
             "support_access_mode": support_grant.permission_mode if support_grant else None,
             "support_actor_type": "support" if support_grant else "workspace_member",
+            "subscription_snapshot": cls._subscription_snapshot(profile),
+            "subscription": subscription_metadata,
         }
 
     @classmethod
@@ -197,6 +218,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         )
         token["support_access_mode"] = support_grant.permission_mode if support_grant else None
         token["support_actor_type"] = "support" if support_grant else "workspace_member"
+        token["subscription_snapshot"] = cls._subscription_snapshot(profile)
+        token["subscription"] = cls._subscription_metadata(profile)
 
         token["mfa_verified"] = bool(getattr(user, "_jwt_mfa_verified", False))
 

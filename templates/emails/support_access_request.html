@@ -4,106 +4,55 @@
     <meta charset="utf-8">
     <style>
         body {
-            font-family: Arial, sans-serif;
-            background: linear-gradient(180deg, #fbfcff 0%, #eef4ff 100%);
+            font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+            background: linear-gradient(180deg, #f5f9ff 0%, #eef5ff 100%);
             margin: 0;
             padding: 32px 16px;
-            color: #172033;
+            color: #101727;
         }
         .card {
-            max-width: 620px;
+            max-width: 640px;
             margin: 0 auto;
-            background-color: #ffffff;
-            border-radius: 24px;
-            padding: 40px 36px;
-            box-shadow: 0 18px 48px rgba(23, 32, 51, 0.10);
-            border: 1px solid #dbe5f4;
-        }
-        .eyebrow {
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: #2457d6;
-            margin-bottom: 16px;
-        }
-        h1 {
-            font-size: 30px;
-            line-height: 1.2;
-            margin: 0 0 14px;
-            color: #111827;
-        }
-        p {
-            line-height: 1.6;
-            margin: 0 0 16px;
-        }
-        .summary {
-            margin: 24px 0 28px;
-            padding: 20px;
-            border-radius: 18px;
-            background-color: #f8fbff;
+            overflow: hidden;
+            background: #ffffff;
             border: 1px solid #d9e6ff;
+            border-radius: 24px;
+            box-shadow: 0 18px 48px rgba(16, 23, 39, 0.10);
         }
-        .summary-label {
-            display: block;
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: #6480b3;
-            margin-bottom: 6px;
-        }
-        .summary-value {
-            font-size: 15px;
-            font-weight: 600;
-            color: #172033;
-            margin-bottom: 14px;
-        }
-        .cta {
-            display: inline-block;
-            margin: 8px 0 18px;
-            padding: 14px 24px;
-            border-radius: 14px;
-            background-color: #2457d6;
-            color: #ffffff !important;
-            text-decoration: none;
-            font-weight: 700;
-            font-size: 15px;
-        }
-        .meta {
-            font-size: 14px;
-            color: #5c6c86;
-        }
-        .footer {
-            margin-top: 28px;
-            font-size: 13px;
-            color: #6b7280;
-        }
-        .fallback-link {
-            display: block;
-            margin-top: 12px;
-            color: #2457d6 !important;
-            text-decoration: underline;
-            word-break: break-all;
-        }
+        .header { padding: 28px 32px; background: #101727; color: #ffffff; }
+        .brand { display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 0 12px; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #ffffff; }
+        .brand img { display: block; height: 34px; width: auto; }
+        .eyebrow { margin-top: 14px; font-size: 12px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #98fcc2; }
+        h1 { margin: 10px 0 0; font-size: 30px; line-height: 1.15; color: #ffffff; }
+        .content { padding: 32px; }
+        p { line-height: 1.6; margin: 0 0 16px; }
+        .summary { margin: 24px 0 28px; padding: 20px; border-radius: 18px; background: #f5f9ff; border: 1px solid #d9e6ff; }
+        .summary-label { display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #6480b3; margin-bottom: 6px; }
+        .summary-value { font-size: 15px; font-weight: 600; color: #172033; margin-bottom: 14px; }
+        .cta { display: inline-block; margin: 8px 0 18px; padding: 14px 24px; border-radius: 14px; background-color: #3c83f7; color: #ffffff !important; text-decoration: none; font-weight: 700; font-size: 15px; }
+        .meta { font-size: 14px; color: #5c6c86; }
+        .footer { margin-top: 28px; font-size: 13px; color: #6b7280; }
+        .fallback-link { display: block; margin-top: 12px; color: #3c83f7 !important; text-decoration: underline; word-break: break-all; }
         @media only screen and (max-width: 640px) {
-            body {
-                padding: 16px 10px;
-            }
-            .card {
-                padding: 28px 20px;
-                border-radius: 20px;
-            }
-            h1 {
-                font-size: 26px;
-            }
+            body { padding: 16px 10px; }
+            .header, .content { padding-left: 20px; padding-right: 20px; }
+            h1 { font-size: 26px; }
         }
     </style>
 </head>
 <body>
-    <div class="card">
+<div class="card">
+    <div class="header">
+        {% if brand_logo_url %}
+        <img src="{{ brand_logo_url }}" alt="Intera" />
+        {% else %}
+        <div class="brand">Intera</div>
+        {% endif %}
         <div class="eyebrow">Temporary Support Access</div>
         <h1>Review access request for {{ company_name }}</h1>
+    </div>
+
+    <div class="content">
         <p><strong>{{ requester_email }}</strong> requested temporary workspace access for <strong>{{ recipient_email }}</strong>.</p>
 
         {% if reason %}
@@ -147,5 +96,6 @@
         </div>
         {% endif %}
     </div>
+</div>
 </body>
 </html>

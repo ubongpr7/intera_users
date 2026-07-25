@@ -40,6 +40,10 @@ class CompanyProfileResponsePayload(McpPayloadModel):
     role_count: int = Field(0, description="Active role count")
     group_count: int = Field(0, description="Active group count")
     agent_configured: Optional[bool] = Field(None, description="Whether an A2A agent is configured")
+    subscription_snapshot: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Cached workspace subscription snapshot",
+    )
     headquarters_address: Optional[AddressResponsePayload] = Field(
         None,
         description="Headquarters address",

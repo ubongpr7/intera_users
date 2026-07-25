@@ -16,37 +16,49 @@ The Intera Inventory Team
 {% endblock text_body %}
 
 {% block html_body %}
-<div style="font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 16px; line-height: 1.6; color: #172033; max-width: 600px; margin: 20px auto; padding: 36px 32px; border: 1px solid #dbe5f4; border-radius: 24px; background: #ffffff;">
-  <div style="margin-bottom: 16px; font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #2457d6;">
-    Account Activation
+<div style="font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; margin: 0; padding: 32px 16px; background: linear-gradient(180deg, #f5f9ff 0%, #eef5ff 100%); color: #101727;">
+  <div style="max-width: 640px; margin: 0 auto; overflow: hidden; border: 1px solid #d9e6ff; border-radius: 24px; background: #ffffff; box-shadow: 0 18px 48px rgba(16, 23, 39, 0.10);">
+    <div style="padding: 26px 32px; background: #101727; color: #ffffff;">
+      {% if brand_logo_url %}
+      <img src="{{ brand_logo_url }}" alt="Intera" style="display: block; height: 34px; width: auto; margin-bottom: 14px;" />
+      {% else %}
+      <div style="display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 0 12px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #ffffff;">
+        Intera
+      </div>
+      {% endif %}
+      <div style="margin-top: 14px; font-size: 12px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: #98fcc2;">
+        Account Activation
+      </div>
+      <h1 style="margin: 10px 0 0; font-size: 30px; line-height: 1.15; color: #ffffff;">
+        Activate your account
+      </h1>
+    </div>
+
+    <div style="padding: 32px;">
+      <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #42526b;">
+        Welcome to Intera Inventory. Please confirm your email address to activate your account and continue into the application.
+      </p>
+
+      <div style="margin: 28px 0;">
+        <a href="{{ protocol }}://{{ domain }}/{{ url|safe }}"
+           style="display: inline-block; background-color: #3c83f7; color: #ffffff; padding: 14px 24px; text-decoration: none; border-radius: 14px; font-weight: 700;">
+          Activate account
+        </a>
+      </div>
+
+      <p style="font-size: 14px; color: #5c6c86; margin: 0 0 12px;">
+        If the button does not open correctly, copy and paste this link into your browser:
+      </p>
+      <p style="margin: 0 0 24px; word-break: break-all;">
+        <a href="{{ protocol }}://{{ domain }}/{{ url|safe }}" style="color: #3c83f7; text-decoration: underline;">
+          {{ protocol }}://{{ domain }}/{{ url|safe }}
+        </a>
+      </p>
+
+      <div style="padding: 16px 18px; border-radius: 18px; background: #f5f9ff; border: 1px solid #d9e6ff; font-size: 14px; color: #5c6c86;">
+        If you did not create this account, you can safely ignore this email.
+      </div>
+    </div>
   </div>
-
-  <h1 style="font-size: 30px; line-height: 1.2; margin: 0 0 16px; color: #111827;">
-    Activate your account
-  </h1>
-
-  <p style="margin: 0 0 16px; color: #42526b;">
-    Welcome to Intera Inventory. Please confirm your email address to activate your account and continue into the application.
-  </p>
-
-  <div style="margin: 28px 0;">
-    <a href="{{ protocol }}://{{ domain }}/{{ url|safe }}"
-       style="display: inline-block; background-color: #2457d6; color: #ffffff; padding: 14px 24px; text-decoration: none; border-radius: 14px; font-weight: 700;">
-      Activate account
-    </a>
-  </div>
-
-  <p style="font-size: 14px; color: #5c6c86; margin: 0 0 12px;">
-    If the button does not open correctly, copy and paste this link into your browser:
-  </p>
-  <p style="margin: 0 0 24px; word-break: break-all;">
-    <a href="{{ protocol }}://{{ domain }}/{{ url|safe }}" style="color: #2457d6; text-decoration: underline;">
-      {{ protocol }}://{{ domain }}/{{ url|safe }}
-    </a>
-  </p>
-
-  <p style="font-size: 14px; color: #6b7280; margin: 0;">
-    If you did not create this account, you can safely ignore this email.
-  </p>
 </div>
 {% endblock html_body %}

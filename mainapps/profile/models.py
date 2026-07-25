@@ -197,6 +197,12 @@ class CompanyProfile(models.Model):
         blank=True
     )
 
+    subscription_snapshot = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=_("Cached subscription snapshot for the workspace."),
+    )
+
 
     headquarters_address = models.ForeignKey(
         CompanyProfileAddress,

@@ -19,7 +19,7 @@ from .models import User, VerificationCode
 from djoser.social.views import ProviderAuthView
 from django.contrib.auth import get_user_model
 from mainapps.common.settings import get_company_or_profile
-from mainapps.profile.models import SupportAccessGrant
+from mainapps.profile.models import CompanyProfile, SupportAccessGrant
 from subapps.kafka.producers import (
     build_actor,
     publish_support_access_workspace_entered,
@@ -225,7 +225,10 @@ class UserViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'], url_path='quota-meta-data')
     def quota_meta_data(self, request):
-        meta_data = request.user.meta_data or {}
+        profile = getattr(request.user, "profile", None)
+        if profile is None and getattr(request.user, "profile_id", None):
+            profile = CompanyProfile.objects.filter(id=request.user.profile_id).first()
+        meta_data = MyTokenObtainPairSerializer._subscription_metadata(profile) if profile else {}
         serializer = self.get_serializer(instance=meta_data)
         return Response(serializer.data)
     

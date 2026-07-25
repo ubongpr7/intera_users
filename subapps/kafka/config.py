@@ -8,6 +8,7 @@ DEFAULT_CONSUMER_TOPICS = (
     "identity.user",
     "identity.company_profile",
     "identity.membership",
+    "workspace.subscription",
 )
 
 

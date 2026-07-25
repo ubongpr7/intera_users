@@ -7,6 +7,12 @@ from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 
 logger = logging.getLogger(__name__)
+INTERA_BRAND = {
+    "name": "Intera",
+    "deep_blue": "#101727",
+    "bright_blue": "#3c83f7",
+    "light_green": "#98fcc2",
+}
 
 
 class EmailThread(threading.Thread):
@@ -23,7 +29,14 @@ class EmailThread(threading.Thread):
 
 
 def send_html_email(subject, message, to_email, html_file, context=None):
-    template_context = {'subject': subject, 'message': message}
+    frontend_site = getattr(settings, "FRONTEND_SITE_URL", "").strip().rstrip("/")
+    template_context = {
+        "subject": subject,
+        "message": message,
+        "brand": INTERA_BRAND,
+        "brand_logo_url": f"{frontend_site}/assets/intera-logo.png" if frontend_site else "/assets/intera-logo.png",
+        "brand_site_url": frontend_site or getattr(settings, "SITE_URL", "").strip().rstrip("/"),
+    }
     if context:
         template_context.update(context)
     html_content = render_to_string(html_file, template_context)

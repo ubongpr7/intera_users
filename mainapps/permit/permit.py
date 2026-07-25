@@ -28,6 +28,13 @@ class HasModelRequestPermission(permissions.BasePermission):
             if not permission:
                 return False
 
+        if permission == "create_company":
+            profile_id = getattr(request.user, "profile_id", None)
+            memberships = getattr(request.user, "company_memberships", None)
+            has_memberships = bool(memberships.exists()) if memberships is not None and hasattr(memberships, "exists") else False
+            if not profile_id and not has_memberships:
+                return True
+
         if getattr(request.user, "is_superuser", False):
             return True
 

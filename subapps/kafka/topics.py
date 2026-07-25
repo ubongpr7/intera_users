@@ -1,6 +1,7 @@
 IDENTITY_USER_TOPIC = "identity.user"
 IDENTITY_COMPANY_PROFILE_TOPIC = "identity.company_profile"
 IDENTITY_MEMBERSHIP_TOPIC = "identity.membership"
+WORKSPACE_SUBSCRIPTION_TOPIC = "workspace.subscription"
 
 CATALOG_PRODUCT_TOPIC = "catalog.product"
 CATALOG_VARIANT_TOPIC = "catalog.variant"
