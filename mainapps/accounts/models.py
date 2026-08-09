@@ -165,12 +165,42 @@ class User(AbstractUser):
         if self.picture.url != settings.MEDIA_URL + 'default.png':
             self.picture.delete()
         super().delete(*args, **kwargs)
-    
+
     @property
     def role(self):
         assignment = self.roles.filter(is_active=True).select_related("role").first()
         return assignment.role.name if assignment else None
-    
+
+
+class LegalConsent(models.Model):
+    class ConsentType(models.TextChoices):
+        TERMS = "terms", "Terms and Conditions"
+        PRIVACY = "privacy", "Privacy Policy"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="legal_consents",
+    )
+    consent_type = models.CharField(max_length=16, choices=ConsentType.choices)
+    policy_version = models.CharField(max_length=64)
+    accepted_at = models.DateTimeField(default=timezone.now)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=1024, blank=True)
+    source = models.CharField(max_length=32, default="signup")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "consent_type", "policy_version"),
+                name="unique_user_legal_consent_version",
+            )
+        ]
+        indexes = [models.Index(fields=("user", "consent_type"))]
+
+    def __str__(self):
+        return f"{self.user.email}: {self.get_consent_type_display()} {self.policy_version}"
+
 class LinkedAccount(models.Model):
     platform=models.CharField(max_length=255)
     platform_user_id=models.UUIDField()

@@ -16,6 +16,11 @@ from subapps.email_system.emails import send_html_email
 from subapps.utils.request_context import get_request_profile_id
 from mainapps.permit.permit import HasModelRequestPermission
 from .models import User, VerificationCode
+from .legal import (
+    PRIVACY_POLICY_VERSION,
+    TERMS_POLICY_VERSION,
+    record_signup_consents,
+)
 from djoser.social.views import ProviderAuthView
 from django.contrib.auth import get_user_model
 from mainapps.common.settings import get_company_or_profile
@@ -389,10 +394,40 @@ class CustomProviderAuthView(ProviderAuthView):
     serializer_class = SocialJWTSerializer
     permission_classes = [AllowAny]
 
+    @staticmethod
+    def _accepted(value):
+        return str(value).strip().lower() in {"1", "true", "yes"}
+
+    def get(self, request, *args, **kwargs):
+        """Carry the signup consent decision through the OAuth redirect."""
+        if request.GET.get("signup") == "1":
+            if not (
+                self._accepted(request.GET.get("terms_accepted"))
+                and self._accepted(request.GET.get("privacy_accepted"))
+            ):
+                return Response(
+                    {"detail": "Both legal policies must be accepted before social signup."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            request.session["social_signup_legal_consent"] = {
+                "terms_version": TERMS_POLICY_VERSION,
+                "privacy_version": PRIVACY_POLICY_VERSION,
+            }
+            request.session.modified = True
+        return super().get(request, *args, **kwargs)
+
     def post(self, request, *args, **kwargs):
+        social_signup_consent = request.session.get("social_signup_legal_consent")
         response = super().post(request, *args, **kwargs)
 
         if response.status_code == 201:
+            if social_signup_consent:
+                user_id = response.data.get("id")
+                user = User.objects.filter(id=user_id).first()
+                if user:
+                    record_signup_consents(user, request=request, source="social_signup")
+                request.session.pop("social_signup_legal_consent", None)
+                request.session.modified = True
             access_token = response.data.get('access')
             refresh_token = response.data.get('refresh')
             _set_session_cookies(response, access_token=access_token, refresh_token=refresh_token)

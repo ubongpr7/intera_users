@@ -31,6 +31,7 @@ DEBUG = os.getenv('DEBUG', 'False') == 'True'
 DATABASE_CONN_MAX_AGE = int(os.getenv("DATABASE_CONN_MAX_AGE", "600"))
 DATABASE_CONN_HEALTH_CHECKS = os.getenv("DATABASE_CONN_HEALTH_CHECKS", "True") == "True"
 DATABASE_DISABLE_SERVER_SIDE_CURSORS = os.getenv("DATABASE_DISABLE_SERVER_SIDE_CURSORS", "True") == "True"
+DATABASE_CONNECT_TIMEOUT = int(os.getenv("DATABASE_CONNECT_TIMEOUT", "10"))
 
 # Logging
 # Django's default logging config won't show `logger.info(...)` from our modules unless you
@@ -156,23 +157,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
-"""
-if LOCAL_SERVER:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
-else:
-    DATABASES = {
-        'default': dj_database_url.config(
-            default=os.getenv('DATABASE_URL'),
-            conn_max_age=600,
-            conn_health_checks=True,
-        )
-    }
-"""
 DATABASES = {
     'default': dj_database_url.config(
         default=os.getenv('DATABASE_URL'),
@@ -182,6 +166,8 @@ DATABASES = {
 }
 
 DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = DATABASE_DISABLE_SERVER_SIDE_CURSORS
+if DATABASE_CONNECT_TIMEOUT > 0:
+    DATABASES["default"].setdefault("OPTIONS", {})["connect_timeout"] = DATABASE_CONNECT_TIMEOUT
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -227,7 +213,27 @@ EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "True") == "True"
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "False") == "True"
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD =os.getenv('EMAIL_HOST_PASSWORD')
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "noreply@interaims.com")
+EMAIL_SUPPORT_EMAIL = os.getenv("EMAIL_SUPPORT_EMAIL", "support@interaims.com").strip()
+EMAIL_NOREPLY_ADDRESS = os.getenv("EMAIL_NOREPLY_ADDRESS", "noreply@interaims.com").strip()
+EMAIL_ACCOUNTS_ADDRESS = os.getenv("EMAIL_ACCOUNTS_ADDRESS", "intera-accounts@interaims.com").strip()
+EMAIL_AGENT_ADDRESS = os.getenv("EMAIL_AGENT_ADDRESS", "intera-agent@interaims.com").strip()
+EMAIL_SYSTEM_FROM_EMAIL = os.getenv("EMAIL_SYSTEM_FROM_EMAIL", f"Intera IMS <{EMAIL_NOREPLY_ADDRESS}>").strip()
+EMAIL_ACCOUNTS_FROM_EMAIL = os.getenv("EMAIL_ACCOUNTS_FROM_EMAIL", f"Intera Accounts <{EMAIL_ACCOUNTS_ADDRESS}>").strip()
+EMAIL_AGENT_FROM_EMAIL = os.getenv("EMAIL_AGENT_FROM_EMAIL", f"Intera Agent <{EMAIL_AGENT_ADDRESS}>").strip()
+EMAIL_DEFAULT_REPLY_TO = os.getenv("EMAIL_DEFAULT_REPLY_TO", EMAIL_SUPPORT_EMAIL).strip()
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    EMAIL_SYSTEM_FROM_EMAIL,
+).strip()
+EMAIL_BRAND_LOGO_URL = os.getenv("EMAIL_BRAND_LOGO_URL", "").strip()
+EMAIL_BRAND_LOGO_LIGHT_URL = os.getenv("EMAIL_BRAND_LOGO_LIGHT_URL", "").strip()
+EMAIL_BRAND_LOGO_DARK_URL = os.getenv("EMAIL_BRAND_LOGO_DARK_URL", "").strip()
+EMAIL_BRAND_STATIC_LOGO_PATH = "images/logos/INTERA-EMAIL-LOGO-DARK.png"
+EMAIL_SHARED_STATIC_BUCKET = os.getenv("EMAIL_SHARED_STATIC_BUCKET", os.getenv("AWS_STORAGE_BUCKET_NAME", "")).strip()
+EMAIL_SHARED_STATIC_LOCATION = os.getenv(
+    "EMAIL_SHARED_STATIC_LOCATION",
+    os.getenv("AWS_STATIC_LOCATION", "assessment/static"),
+).strip("/")
 COMPANY_INVITATION_EXPIRY_DAYS = int(os.getenv("COMPANY_INVITATION_EXPIRY_DAYS", "2"))
 SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
 FRONTEND_SITE_URL = os.getenv("FRONTEND_SITE_URL", SITE_URL).strip().rstrip("/")
@@ -253,35 +259,26 @@ AUTHENTICATION_BACKENDS = [
 ]
 
 
-def _read_key_from_env(value_var: str, path_var: str) -> str | None:
-    """Read PEM key either from raw env value or a file path env."""
+def _read_key_from_env(value_var: str) -> str | None:
+    """Read a PEM key from a raw environment variable."""
     key_value = os.getenv(value_var)
     if key_value:
         return key_value.replace("\\n", "\n")
-
-    key_path = os.getenv(path_var)
-    if not key_path:
-        return None
-
-    try:
-        with open(key_path, "r", encoding="utf-8") as key_file:
-            return key_file.read()
-    except OSError as exc:
-        raise ImproperlyConfigured(f"Unable to read JWT key file '{key_path}': {exc}") from exc
+    return None
 
 
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "RS256")
-JWT_SIGNING_KEY = _read_key_from_env("JWT_PRIVATE_KEY", "JWT_PRIVATE_KEY_PATH")
-JWT_VERIFYING_KEY = _read_key_from_env("JWT_PUBLIC_KEY", "JWT_PUBLIC_KEY_PATH")
+JWT_SIGNING_KEY = _read_key_from_env("JWT_PRIVATE_KEY")
+JWT_VERIFYING_KEY = _read_key_from_env("JWT_PUBLIC_KEY")
 
 if JWT_ALGORITHM.upper().startswith(("RS", "ES")):
     if not JWT_SIGNING_KEY:
         raise ImproperlyConfigured(
-            "JWT_PRIVATE_KEY or JWT_PRIVATE_KEY_PATH must be set when using RS/ES algorithms."
+            "JWT_PRIVATE_KEY must be set when using RS/ES algorithms."
         )
     if not JWT_VERIFYING_KEY:
         raise ImproperlyConfigured(
-            "JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_PATH must be set when using RS/ES algorithms."
+            "JWT_PUBLIC_KEY must be set when using RS/ES algorithms."
         )
 
 # DJOSER CONFIGURATION
@@ -295,6 +292,11 @@ DJOSER = {
     'LOGOUT_ON_PASSWORD_CHANGE': True,
     'EMAIL_FRONTEND_DOMAIN': EMAIL_FRONTEND_DOMAIN,
     'EMAIL_FRONTEND_PROTOCOL': EMAIL_FRONTEND_PROTOCOL,
+    'EMAIL_FRONTEND_SITE_NAME': 'Intera IMS',
+    'EMAIL': {
+        'activation': 'mainapps.accounts.emails.InteraActivationEmail',
+        'password_reset': 'mainapps.accounts.emails.InteraPasswordResetEmail',
+    },
     'TOKEN_MODEL': 'rest_framework.authtoken.models.Token',  
 
     'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': os.getenv('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', '').split(','),
@@ -466,6 +468,14 @@ if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_STORAGE_BUCKET_NAME:
     }
     STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_STATIC_LOCATION}/"
 
+if not EMAIL_BRAND_LOGO_URL and EMAIL_SHARED_STATIC_BUCKET:
+    EMAIL_BRAND_LOGO_URL = (
+        f"https://{EMAIL_SHARED_STATIC_BUCKET}.s3.amazonaws.com/"
+        f"{EMAIL_SHARED_STATIC_LOCATION}/{EMAIL_BRAND_STATIC_LOGO_PATH}"
+    )
+elif not EMAIL_BRAND_LOGO_URL:
+    EMAIL_BRAND_LOGO_URL = f"{STATIC_URL.rstrip('/')}/{EMAIL_BRAND_STATIC_LOGO_PATH}"
+
 
 CELERY_BROKER_URL = 'redis://redis:6379/0'
 CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
@@ -474,3 +484,4 @@ USE_THOUSAND_SEPARATOR = True
 
 # INTER SERVICE COMMUNICATION
 KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+

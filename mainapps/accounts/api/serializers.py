@@ -4,6 +4,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from mainapps.profile.api.serializers import StaffRoleAssignmentSerializer
 from mainapps.permit.models import CustomUserPermission
 from mainapps.accounts.serializers import MyTokenObtainPairSerializer as CoreTokenObtainPairSerializer
+from mainapps.accounts.legal import record_signup_consents, validate_signup_consents
 
 from django.contrib.auth.password_validation import validate_password
 
@@ -11,10 +12,15 @@ from django.contrib.auth.password_validation import validate_password
 class RootUserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True,)
     re_password = serializers.CharField(write_only=True, required=True)
+    terms_accepted = serializers.BooleanField(write_only=True, required=True)
+    privacy_accepted = serializers.BooleanField(write_only=True, required=True)
 
     class Meta:
         model = User
-        fields = ('first_name', 'email', 'password', 're_password')
+        fields = (
+            'first_name', 'email', 'password', 're_password',
+            'terms_accepted', 'privacy_accepted',
+        )
         extra_kwargs = {
             'first_name': {'required': True},
             'email': {'required': True}
@@ -23,9 +29,12 @@ class RootUserCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop("re_password", None)
-        return User.objects.create_user(**validated_data)
+        user = User.objects.create_user(**validated_data)
+        record_signup_consents(user, request=self.context.get("request"), source="root_signup")
+        return user
     
     def validate(self, attrs):
+        attrs = validate_signup_consents(attrs)
         password = attrs.get("password")
         re_password = attrs.get("re_password")
         if password != re_password:

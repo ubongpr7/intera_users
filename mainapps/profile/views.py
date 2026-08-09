@@ -530,6 +530,7 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             message=message,
             to_email=[invitation.email],
             html_file="emails/company_invitation.html",
+            from_email=getattr(settings, "EMAIL_ACCOUNTS_FROM_EMAIL", settings.DEFAULT_FROM_EMAIL),
             context={
                 "company_name": invitation.profile.name,
                 "invited_by_email": inviter_email,
@@ -1109,6 +1110,7 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             message=grant.reason.strip() or f"{requester_email} requested temporary access for {grant.profile.name}.",
             to_email=[grant.grantee_email_snapshot],
             html_file="emails/support_access_request.html",
+            from_email=getattr(settings, "EMAIL_ACCOUNTS_FROM_EMAIL", settings.DEFAULT_FROM_EMAIL),
             context={
                 "company_name": grant.profile.name,
                 "requester_email": requester_email,

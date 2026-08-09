@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.http import JsonResponse
+from django.db import connection
 from django.urls import path,include
 from django.urls import re_path
 from rest_framework import permissions
@@ -29,9 +30,23 @@ schema_view = get_schema_view(
 def healthz(_request):
     return JsonResponse({"status": "ok"})
 
+
+def readyz(_request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except Exception as exc:
+        return JsonResponse(
+            {"status": "error", "database": "unavailable", "error": type(exc).__name__},
+            status=503,
+        )
+    return JsonResponse({"status": "ok", "database": "available"})
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('healthz/', healthz, name='healthz'),
+    path('readyz/', readyz, name='readyz'),
     path('djoser/', include('djoser.urls'), name='djoser_users'),
     path('auth/', include("mainapps.accounts.jwt_urls")),
     path('accounts/', include("mainapps.accounts.urls")),

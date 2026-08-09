@@ -317,16 +317,20 @@ def _list_accessible_company_profiles_sync(
 
 
 def _get_active_company_profile_sync(*, principal: UsersMcpPrincipal) -> dict[str, Any]:
-    principal_user_id = coerce_identity_id(principal.user_id)
-    profile = _accessible_profile_queryset(principal=principal).filter(id=principal.profile_id).first()
-    if profile is None:
-        raise RuntimeError("Authenticated profile_id is not accessible to the caller.")
+    close_old_connections()
+    try:
+        principal_user_id = coerce_identity_id(principal.user_id)
+        profile = _accessible_profile_queryset(principal=principal).filter(id=principal.profile_id).first()
+        if profile is None:
+            raise RuntimeError("Authenticated profile_id is not accessible to the caller.")
 
-    return {
-        "profile": _company_profile_payload(profile, principal_user_id=principal_user_id or 0),
-        "profile_id": principal.profile_id,
-        "company_code": principal.company_code,
-    }
+        return {
+            "profile": _company_profile_payload(profile, principal_user_id=principal_user_id or 0),
+            "profile_id": principal.profile_id,
+            "company_code": principal.company_code,
+        }
+    finally:
+        close_old_connections()
 
 
 def _search_company_staff_sync(

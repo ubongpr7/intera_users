@@ -11,6 +11,7 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer as BaseT
 
 from djoser.social.serializers import ProviderAuthSerializer
 from mainapps.profile.models import CompanyMembership, CompanyProfile
+from mainapps.accounts.legal import record_signup_consents, validate_signup_consents
 from mainapps.profile.support_access import (
     list_accessible_profile_contexts,
     resolve_profile_access,
@@ -467,17 +468,30 @@ class VerificationCodeSerializer(serializers.ModelSerializer):
 
 
 class UserCreateSerializer(BaseUserCreateSerializer):
+    terms_accepted = serializers.BooleanField(write_only=True, required=True)
+    privacy_accepted = serializers.BooleanField(write_only=True, required=True)
+
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
-        fields = ('id', 'email', 'first_name', 'last_name', 'password')
+        fields = (
+            'id', 'email', 'first_name', 'last_name', 'password',
+            'terms_accepted', 'privacy_accepted',
+        )
+
+    def validate(self, attrs):
+        # Remove consent-only fields before Djoser builds a User instance.
+        attrs = validate_signup_consents(attrs)
+        return super().validate(attrs)
         
     def create(self, validated_data):
-        return User.objects.create_user(
+        user = User.objects.create_user(
             email=validated_data['email'].lower(),
             password=validated_data['password'],
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', ''),
         )
+        record_signup_consents(user, request=self.context.get("request"), source="djoser_signup")
+        return user
 
 
 
@@ -534,8 +548,11 @@ class OwnerRegistrationSerializer(serializers.Serializer):
     re_password = serializers.CharField(write_only=True)
     first_name = serializers.CharField(required=False, allow_blank=True)
     last_name = serializers.CharField(required=False, allow_blank=True)
+    terms_accepted = serializers.BooleanField(write_only=True, required=True)
+    privacy_accepted = serializers.BooleanField(write_only=True, required=True)
 
     def validate(self, attrs):
+        attrs = validate_signup_consents(attrs)
         if attrs["password"] != attrs["re_password"]:
             raise serializers.ValidationError({"re_password": "Passwords do not match"})
         validate_password(attrs["password"])
@@ -551,6 +568,7 @@ class OwnerRegistrationSerializer(serializers.Serializer):
             first_name=validated_data.get("first_name", ""),
             last_name=validated_data.get("last_name", ""),
         )
+        record_signup_consents(user, request=self.context.get("request"), source="owner_signup")
         return user
 
 
