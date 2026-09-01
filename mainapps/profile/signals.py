@@ -1,9 +1,8 @@
-from django.core.management import call_command
 from django.db import transaction
 from django.db.models.signals import m2m_changed, post_delete, post_save
 from django.dispatch import receiver
 
-from .models import CompanyMembership, CompanyProfile
+from .models import CompanyMembership, CompanyProfile, CompanyProfileAddress
 from subapps.kafka.producers.access_control import publish_membership_permissions_updated
 from subapps.kafka.producers.identity import (
     publish_company_membership_deleted,
@@ -29,11 +28,6 @@ def create_default_roles_and_groups(sender, instance, created, **kwargs):
             },
         )
 
-    def bootstrap_profile_defaults():
-        call_command("setup_default_roles", "--profile-id", str(instance.id))
-        call_command("setup_default_groups", "--profile-id", str(instance.id))
-
-    transaction.on_commit(bootstrap_profile_defaults)
     transaction.on_commit(lambda: publish_company_profile_upserted(instance))
 
 
@@ -41,6 +35,30 @@ def create_default_roles_and_groups(sender, instance, created, **kwargs):
 def publish_deleted_company_profile(sender, instance, **kwargs):
     del sender, kwargs
     transaction.on_commit(lambda: publish_company_profile_deleted(instance))
+
+
+def _publish_address_profile(profile_id: int | None) -> None:
+    if not profile_id:
+        return
+
+    def publish() -> None:
+        profile = CompanyProfile.objects.select_related("headquarters_address").filter(pk=profile_id).first()
+        if profile is not None:
+            publish_company_profile_upserted(profile)
+
+    transaction.on_commit(publish)
+
+
+@receiver(post_save, sender=CompanyProfileAddress)
+def publish_company_profile_after_address_save(sender, instance, **kwargs):
+    del sender, kwargs
+    _publish_address_profile(instance.profile_id)
+
+
+@receiver(post_delete, sender=CompanyProfileAddress)
+def publish_company_profile_after_address_delete(sender, instance, **kwargs):
+    del sender, kwargs
+    _publish_address_profile(instance.profile_id)
 
 
 @receiver(post_save, sender=CompanyMembership)

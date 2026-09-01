@@ -94,8 +94,25 @@ def get_current_principal(*, required: bool = False) -> UsersMcpPrincipal | None
     return principal
 
 
-def _build_principal_from_token(token: str) -> UsersMcpPrincipal:
+def _merge_authorization_context(claims: dict[str, Any], context_token: str | None) -> dict[str, Any]:
+    if not context_token:
+        return claims
+    context = dict(UntypedToken(context_token).payload)
+    if (
+        context.get("token_type") != "intera_authorization_context"
+        or str(context.get("user_id") or "") != str(claims.get("user_id") or claims.get("sub") or "")
+        or str(context.get("profile_id") or "") != str(claims.get("profile_id") or "")
+    ):
+        raise RuntimeError("Authorization context does not match the access token.")
+    permissions = set(claims.get("permissions") or []) | set(context.get("permissions") or [])
+    for wildcard in context.get("wildcards") or []:
+        permissions.update((context.get("wildcard_permissions") or {}).get(wildcard) or [])
+    return {**claims, "permissions": sorted(str(item) for item in permissions if str(item).strip())}
+
+
+def _build_principal_from_token(token: str, context_token: str | None = None) -> UsersMcpPrincipal:
     claims = dict(UntypedToken(token).payload)
+    claims = _merge_authorization_context(claims, context_token)
     user_id = claims.get("user_id") or claims.get("id") or claims.get("sub")
     if user_id in (None, ""):
         raise RuntimeError("Access token missing user identifier.")
@@ -142,7 +159,7 @@ class UsersMcpAuthMiddleware:
             return
 
         try:
-            principal = _build_principal_from_token(token)
+            principal = _build_principal_from_token(token, headers.get("x-intera-authorization-context"))
         except Exception as exc:
             response = JSONResponse({"detail": str(exc)}, status_code=401)
             await response(scope, receive, send)

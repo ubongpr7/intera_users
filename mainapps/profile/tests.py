@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,10 +13,44 @@ from rest_framework_simplejwt.tokens import UntypedToken
 from mainapps.accounts.models import User
 from mainapps.permit.models import CustomUserPermission, PermissionCategory
 from mainapps.permit.models import CombinedPermissions
-from mainapps.profile.models import CompanyInvitation, CompanyMembership, LLMModel, LLMProviderChoices, ModelVersion, ProfileAgent
+from mainapps.profile.models import CompanyInvitation, CompanyMembership, CompanyProfileAddress, LLMModel, LLMProviderChoices, ModelVersion, ProfileAgent
 from mainapps.profile.models import CompanyProfile, StaffGroup, StaffRole, StaffRoleAssignment, SupportAccessGrant
 from mainapps.profile.support_access import expire_support_grants
 from mainapps.profile.support_access import expire_support_grants
+from subapps.kafka.producers.identity import _serialize_company_profile
+
+
+class CompanyProfileIdentityPayloadTests(SimpleTestCase):
+    def test_profile_payload_includes_a_readable_headquarters_address(self):
+        profile = CompanyProfile(
+            id=7,
+            name="QA Workspace",
+            company_code="QA7",
+            headquarters_address=CompanyProfileAddress(
+                street_number=10,
+                street="First Avenue",
+                city="Lagos",
+                region="Lagos",
+                country="Nigeria",
+                postal_code="104102",
+            ),
+        )
+
+        payload = _serialize_company_profile(profile)
+
+        self.assertEqual(
+            payload["headquarters_address"],
+            {
+                "street_number": 10,
+                "street": "First Avenue",
+                "apt_number": None,
+                "city": "Lagos",
+                "subregion": "",
+                "region": "Lagos",
+                "country": "Nigeria",
+                "postal_code": "104102",
+            },
+        )
 
 
 class ProfileAgentModelTests(SimpleTestCase):
@@ -238,6 +273,29 @@ class CompanyInvitationActionTests(TestCase):
         self.assertEqual(CompanyInvitation.objects.filter(email="invitee@example.com").count(), 1)
         send_html_email_mock.assert_called_once()
         publish_invitation_changed_mock.assert_called_once()
+
+    def test_pending_endpoint_marks_expired_invitations_before_returning(self):
+        expired = CompanyInvitation.objects.create(
+            profile=self.profile,
+            email="expired@example.com",
+            role="member",
+            invited_by=self.user,
+            expires_at=timezone.now() - timedelta(hours=1),
+        )
+        active = CompanyInvitation.objects.create(
+            profile=self.profile,
+            email="active@example.com",
+            role="member",
+            invited_by=self.user,
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+
+        response = self.client.get("/management/invitations/pending/")
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        expired.refresh_from_db()
+        self.assertEqual(expired.status, CompanyInvitation.InvitationStatus.EXPIRED)
+        self.assertEqual([item["id"] for item in response.data], [active.id])
 
     @patch("mainapps.profile.views.send_html_email")
     @patch("mainapps.profile.views.publish_invitation_changed")
@@ -812,3 +870,103 @@ class SupportAccessGrantTests(TestCase):
         returned_emails = {item["email"] for item in payload}
         self.assertIn(outsider.email, returned_emails)
         self.assertNotIn(self.staff_user.email, returned_emails)
+
+
+class InternalHosperatorGroupMembersTests(TestCase):
+    service_token = "notification-service-test-token"
+
+    def setUp(self):
+        self.client = APIClient()
+        self.owner = User.objects.create_user(email="group-owner@example.com", password="password123")
+        self.profile = CompanyProfile.objects.create(owner=self.owner, name="Notification Hospital")
+        self.active_member = User.objects.create_user(email="group-member@example.com", password="password123")
+        self.inactive_membership_user = User.objects.create_user(
+            email="group-inactive-membership@example.com", password="password123"
+        )
+        self.disabled_user = User.objects.create_user(email="group-disabled@example.com", password="password123")
+        self.disabled_user.is_active = False
+        self.disabled_user.save(update_fields=["is_active"])
+        for user, is_active in (
+            (self.active_member, True),
+            (self.inactive_membership_user, False),
+            (self.disabled_user, True),
+        ):
+            CompanyMembership.objects.create(
+                user=user,
+                profile=self.profile,
+                role=CompanyMembership.MembershipRole.MEMBER,
+                is_active=is_active,
+                invited_by=self.owner,
+            )
+        self.group = StaffGroup.objects.create(
+            profile=self.profile,
+            name="Duty Managers",
+            created_by=self.owner,
+        )
+        self.group.users.add(self.owner, self.active_member, self.inactive_membership_user, self.disabled_user)
+        self.path = f"/management/internal/profiles/{self.profile.id}/groups/{self.group.id}/members/"
+
+    def _get(self, path=None, token=None):
+        headers = {}
+        if token is not None:
+            headers["HTTP_AUTHORIZATION"] = f"Bearer {token}"
+        return self.client.get(path or self.path, **headers)
+
+    @patch.dict(os.environ, {"HOSPERATOR_NOTIFICATION_SERVICE_TOKEN": service_token})
+    def test_returns_only_active_profile_group_members_in_contract_shape(self):
+        response = self._get(token=self.service_token)
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertEqual(
+            response.json(),
+            {
+                "profile_id": self.profile.id,
+                "group_id": str(self.group.id),
+                "member_user_ids": [str(self.owner.id), str(self.active_member.id)],
+            },
+        )
+
+    @patch.dict(os.environ, {"HOSPERATOR_NOTIFICATION_SERVICE_TOKEN": service_token})
+    def test_rejects_missing_or_invalid_service_bearer_token(self):
+        self.assertEqual(self._get().status_code, HTTPStatus.FORBIDDEN)
+        self.assertEqual(self._get(token="wrong-token").status_code, HTTPStatus.FORBIDDEN)
+        self.assertEqual(self._get(token=self.service_token).status_code, HTTPStatus.OK)
+
+    @patch.dict(os.environ, {"HOSPERATOR_NOTIFICATION_SERVICE_TOKEN": service_token})
+    def test_hides_cross_profile_or_inactive_group_as_not_found(self):
+        other_profile = CompanyProfile.objects.create(owner=self.owner, name="Other Hospital")
+        cross_profile_path = (
+            f"/management/internal/profiles/{other_profile.id}/groups/{self.group.id}/members/"
+        )
+        self.assertEqual(self._get(path=cross_profile_path, token=self.service_token).status_code, HTTPStatus.NOT_FOUND)
+
+        self.group.is_active = False
+        self.group.save(update_fields=["is_active"])
+        self.assertEqual(self._get(token=self.service_token).status_code, HTTPStatus.NOT_FOUND)
+
+    @patch.dict(os.environ, {"HOSPERATOR_NOTIFICATION_SERVICE_TOKEN": service_token})
+    def test_rejects_group_larger_than_notification_contract_capacity(self):
+        users = [
+            User(email=f"bounded-group-{index}@example.com", username=f"bounded-group-{index}")
+            for index in range(201)
+        ]
+        User.objects.bulk_create(users)
+        CompanyMembership.objects.bulk_create(
+            [
+                CompanyMembership(
+                    user=user,
+                    profile=self.profile,
+                    role=CompanyMembership.MembershipRole.MEMBER,
+                    is_active=True,
+                    invited_by=self.owner,
+                )
+                for user in users
+            ]
+        )
+        self.group.users.add(*users)
+
+        response = self._get(token=self.service_token)
+
+        self.assertEqual(response.status_code, HTTPStatus.CONFLICT)
+        self.assertEqual(response.json(), {"detail": "Group exceeds the operational notification membership limit."})

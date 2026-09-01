@@ -15,6 +15,14 @@ from django.core.validators import RegexValidator
 from django.core.exceptions import ValidationError
 
 class Address(models.Model):
+    shared_address_id = models.UUIDField(
+        null=True,
+        blank=True,
+        db_index=True,
+        editable=False,
+        verbose_name=_('Shared address ID'),
+        help_text=_('Opaque address ID owned by the shared locations service.'),
+    )
     country = models.CharField(
         max_length=255,
         verbose_name=_('Country'),
@@ -84,6 +92,24 @@ class Address(models.Model):
 
     def __str__(self):
         return f'{self.street}, {self.city}, {self.region}, {self.country}'
+
+
+class SharedAddressMigrationMap(models.Model):
+    source_model = models.CharField(max_length=120)
+    source_pk = models.CharField(max_length=64)
+    profile_id = models.CharField(max_length=128, blank=True, default='')
+    shared_address_id = models.UUIDField(null=True, blank=True, db_index=True)
+    status = models.CharField(max_length=20, default='pending')
+    error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['source_model', 'source_pk'],
+            name='common_shared_address_source_unique',
+        )]
+        ordering = ['source_model', 'source_pk']
 
 def attachment_upload_path(instance, filename):
     timestamp = datetime.now().strftime("%y%m%d%H%M%S")
@@ -171,5 +197,4 @@ class Unit(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.dimension_type})"
-
 

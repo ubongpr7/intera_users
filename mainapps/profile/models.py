@@ -4,6 +4,9 @@ import string
 import uuid
 from cryptography.fernet import Fernet
 from django.db import models
+from django.db.models import Q
+from django.db.models.functions import Lower
+from django.db.models.signals import m2m_changed
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.utils.translation import gettext_lazy as _
@@ -13,7 +16,7 @@ from django.contrib.contenttypes.fields import GenericRelation
 from mainapps.common.models import Address, Attachment
 from django.utils import timezone
 
-from mainapps.permit.models import CustomUserPermission
+from mainapps.permit.models import CustomUserPermission, PlatformChoices
 
 class RecallPolicies(models.TextChoices):
     REMOVE = "0", _("Remove from Stock")
@@ -244,10 +247,10 @@ class CompanyProfile(models.Model):
         super().save(*args, **kwargs)
 
     def get_staff_roles(self):
-        return StaffRole.objects.filter(profile=self)
+        return StaffRole.objects.for_profile(self)
 
     def get_staff_groups(self):
-        return StaffGroup.objects.filter(profile=self)
+        return StaffGroup.objects.for_profile(self)
 
     def staff_groups(self):
         return self.get_staff_groups()
@@ -272,8 +275,10 @@ class ProfileManager(models.Manager):
     """
 
     def for_profile(self, profile):
-        
-        return self.get_queryset().filter(profile=profile)
+        queryset = self.get_queryset()
+        if any(field.name == "is_system" for field in self.model._meta.fields):
+            return queryset.filter(Q(profile=profile) | Q(is_system=True, profile__isnull=True))
+        return queryset.filter(profile=profile)
 
 
 class ProfileMixin(models.Model):
@@ -312,6 +317,13 @@ class ProfileMixin(models.Model):
 
 class StaffGroup(ProfileMixin):
     name = models.CharField(max_length=255)
+    is_system = models.BooleanField(default=False, db_index=True)
+    platform = models.CharField(
+        max_length=32,
+        choices=PlatformChoices.choices,
+        default=PlatformChoices.INTERA_IMS,
+        db_index=True,
+    )
     is_active = models.BooleanField(default=True)
     permissions = models.ManyToManyField(
         CustomUserPermission,
@@ -328,13 +340,40 @@ class StaffGroup(ProfileMixin):
     updated_at = models.DateTimeField(auto_now=True)
     users = models.ManyToManyField(settings.AUTH_USER_MODEL,blank=True, related_name='staff_groups')
     description = models.TextField(null=True, blank=True)
+
+    def clean(self):
+        if self.is_system and self.profile_id:
+            raise ValidationError("System groups cannot be attached to a workspace.")
+        if self.pk and self.permissions.exclude(platform=self.platform).exists():
+            raise ValidationError("Group platform must match every assigned permission platform.")
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            previous = type(self).objects.filter(pk=self.pk).first()
+            if previous and previous.is_system:
+                protected = ("name", "platform", "description", "is_active", "profile_id", "created_by_id", "is_system")
+                if any(getattr(previous, field) != getattr(self, field) for field in protected):
+                    raise ValidationError("System groups are managed by Intera staff and cannot be edited.")
+        self.clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
     class Meta:
-        unique_together=('profile','name')
+        constraints = [
+            models.UniqueConstraint(Lower("name"), "platform", "profile", name="staffgroup_profile_platform_name_ci"),
+            models.UniqueConstraint(Lower("name"), "platform", condition=Q(is_system=True), name="staffgroup_system_platform_name_ci"),
+        ]
 
 class StaffRole(ProfileMixin):
     name = models.CharField(max_length=255)
+    is_system = models.BooleanField(default=False, db_index=True)
+    platform = models.CharField(
+        max_length=32,
+        choices=PlatformChoices.choices,
+        default=PlatformChoices.INTERA_IMS,
+        db_index=True,
+    )
     is_active = models.BooleanField(default=True)
     permissions = models.ManyToManyField(
         CustomUserPermission,
@@ -352,8 +391,50 @@ class StaffRole(ProfileMixin):
     updated_at = models.DateTimeField(auto_now=True)
     description = models.TextField(null=True, blank=True)
 
+    def clean(self):
+        if self.is_system and self.profile_id:
+            raise ValidationError("System roles cannot be attached to a workspace.")
+        if self.pk and self.permissions.exclude(platform=self.platform).exists():
+            raise ValidationError("Role platform must match every assigned permission platform.")
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            previous = type(self).objects.filter(pk=self.pk).first()
+            if previous and previous.is_system:
+                protected = ("name", "platform", "description", "is_active", "profile_id", "created_by_id", "is_system")
+                if any(getattr(previous, field) != getattr(self, field) for field in protected):
+                    raise ValidationError("System roles are managed by Intera staff and cannot be edited.")
+        self.clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(Lower("name"), "platform", "profile", name="staffrole_profile_platform_name_ci"),
+            models.UniqueConstraint(Lower("name"), "platform", condition=Q(is_system=True), name="staffrole_system_platform_name_ci"),
+        ]
+
+
+def _prevent_cross_platform_permission_assignment(sender, instance, action, reverse, model, pk_set, **kwargs):
+    """A role or group may only receive permissions from its own product platform."""
+    if action != "pre_add" or not pk_set:
+        return
+
+    platform = instance.platform
+    if model.objects.filter(pk__in=pk_set).exclude(platform=platform).exists():
+        raise ValidationError("Roles and groups can only contain permissions from their own platform.")
+
+
+m2m_changed.connect(
+    _prevent_cross_platform_permission_assignment,
+    sender=StaffGroup.permissions.through,
+)
+m2m_changed.connect(
+    _prevent_cross_platform_permission_assignment,
+    sender=StaffRole.permissions.through,
+)
 
     
 class StaffRoleAssignment(ProfileMixin):

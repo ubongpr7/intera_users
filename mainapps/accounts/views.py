@@ -10,12 +10,15 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from django.db.models import Q
+from django.db.models import Sum
+from decimal import Decimal
+from urllib.parse import quote
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from subapps.email_system.emails import send_html_email
 from subapps.utils.request_context import get_request_profile_id
 from mainapps.permit.permit import HasModelRequestPermission
-from .models import User, VerificationCode
+from .models import ReferralPayout, User, VerificationCode
 from .legal import (
     PRIVACY_POLICY_VERSION,
     TERMS_POLICY_VERSION,
@@ -32,6 +35,7 @@ from subapps.kafka.producers import (
 )
 
 from .serializers import SocialJWTSerializer
+from .authorization_context import authorization_context_from_request, issue_authorization_context, issue_websocket_ticket
 from django.conf import settings
 from .serializers import (
     MyUserSerializer,
@@ -48,6 +52,14 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
     TokenVerifyView
 )
+
+
+class WebSocketTicketView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        context = authorization_context_from_request(request)
+        return Response({"ticket": issue_websocket_ticket(context)}, status=status.HTTP_201_CREATED)
 
 
 def _set_session_cookies(response, access_token=None, refresh_token=None):
@@ -82,6 +94,11 @@ def _build_auth_payload(user, profile, refresh, access, *, support_grant=None):
     return {
         "refresh": str(refresh),
         "access": str(access),
+        "authorization_context": issue_authorization_context(
+            user,
+            profile=profile,
+            support_grant=support_grant,
+        ),
         "id": user.id,
         "username": user.username,
         "is_verified": getattr(user, "is_verified", False),
@@ -205,7 +222,7 @@ class StandardResultsSetPagination(PageNumberPagination):
 class UserViewSet(viewsets.ModelViewSet):
     """User management ViewSet"""
     ADMIN_ACTIONS = {"list", "retrieve", "update", "partial_update", "destroy", "search", "create_staff"}
-    PERSONAL_ACTIONS = {"me", "partial_update_me", "quota_meta_data"}
+    PERSONAL_ACTIONS = {"me", "partial_update_me", "quota_meta_data", "referrals"}
 
     queryset = User.objects.all()
     serializer_class = UserSerializer
@@ -268,6 +285,55 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(MyUserSerializer(request.user).data)
+
+    @action(detail=False, methods=['get'])
+    def referrals(self, request):
+        user = request.user
+        payouts = user.referral_payouts.select_related('referred_user').order_by('-created_at')
+        referred_users = user.referred_users.order_by('-date_joined')[:100]
+
+        def total_for(queryset):
+            return queryset.aggregate(total=Sum('payout_amount')).get('total') or Decimal('0.00')
+
+        frontend_url = (
+            getattr(settings, 'FRONTEND_SITE_URL', '').rstrip('/')
+            or request.build_absolute_uri('/').rstrip('/')
+        )
+        referral_url = f'{frontend_url}/accounts/register?ref={quote(user.referral_code)}' if frontend_url else ''
+        return Response({
+            'referral_code': user.referral_code,
+            'referral_url': referral_url,
+            'commission_rate': '0.05',
+            'referred_count': user.referred_users.count(),
+            'referred_users': [
+                {
+                    'id': referred.id,
+                    'email': referred.email,
+                    'first_name': referred.first_name,
+                    'last_name': referred.last_name,
+                    'joined_at': referred.date_joined.isoformat() if referred.date_joined else None,
+                }
+                for referred in referred_users
+            ],
+            'earnings': {
+                'total': str(total_for(payouts)),
+                'pending': str(total_for(payouts.filter(status=ReferralPayout.Status.PENDING))),
+                'paid': str(total_for(payouts.filter(status=ReferralPayout.Status.PAID))),
+            },
+            'payouts': [
+                {
+                    'id': payout.id,
+                    'payment_reference': payout.payment_reference,
+                    'payment_amount': str(payout.payment_amount),
+                    'commission_amount': str(payout.payout_amount),
+                    'currency': payout.currency,
+                    'status': payout.status,
+                    'plan_slug': payout.plan_slug,
+                    'created_at': payout.created_at.isoformat(),
+                }
+                for payout in payouts[:100]
+            ],
+        })
     
     
     @action(detail=False, methods=['get'])

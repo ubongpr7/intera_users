@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.password_validation import validate_password
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import User, VerificationCode
@@ -17,6 +18,20 @@ from mainapps.profile.support_access import (
     resolve_profile_access,
 )
 from subapps.kafka.producers import build_actor, publish_support_access_workspace_entered
+from .authorization_context import issue_authorization_context
+
+
+def _resolve_referrer(attrs):
+    code = (attrs.get('referral_code') or '').strip().upper()
+    attrs['referral_code'] = code
+    if not code:
+        attrs['referrer_user'] = None
+        return attrs
+    referrer = User.objects.filter(referral_code__iexact=code).first()
+    if referrer is None:
+        raise serializers.ValidationError({'referral_code': 'Referral code is invalid.'})
+    attrs['referrer_user'] = referrer
+    return attrs
 
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -117,7 +132,10 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         current_time = timezone.now()
         try:
-            for assignment in user.roles.filter(profile=profile, is_active=True).select_related("role"):
+            for assignment in user.roles.filter(
+                Q(profile=profile) | Q(role__is_system=True, role__profile__isnull=True),
+                is_active=True,
+            ).select_related("role"):
                 if assignment.end_date and assignment.end_date < current_time:
                     assignment.is_active = False
                     assignment.save(update_fields=["is_active"])
@@ -129,7 +147,10 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         except Exception:
             pass
         try:
-            groups = user.staff_groups.filter(profile=profile, is_active=True)
+            groups = user.staff_groups.filter(
+                Q(profile=profile) | Q(is_system=True, profile__isnull=True),
+                is_active=True,
+            )
             for group in groups:
                 user_perms.update(group.permissions.all().values_list("codename", flat=True))
         except Exception:
@@ -185,7 +206,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     @classmethod
     def _apply_claims(cls, token, user, profile, support_grant=None):
-        token["permissions"] = cls.get_all_permissions(user, profile=profile, support_grant=support_grant)
         token["profile_id"] = str(profile.id) if profile else None
         token["company_code"] = profile.company_code if profile else None
         token["profile_industry"] = profile.industry if profile else None
@@ -219,8 +239,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         )
         token["support_access_mode"] = support_grant.permission_mode if support_grant else None
         token["support_actor_type"] = "support" if support_grant else "workspace_member"
-        token["subscription_snapshot"] = cls._subscription_snapshot(profile)
-        token["subscription"] = cls._subscription_metadata(profile)
 
         token["mfa_verified"] = bool(getattr(user, "_jwt_mfa_verified", False))
 
@@ -286,6 +304,11 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             )
         data["refresh"] = str(refresh)
         data["access"] = str(access_token)
+        data["authorization_context"] = issue_authorization_context(
+            user,
+            profile=profile,
+            support_grant=access.support_grant,
+        )
 
         accessible_profiles = self.list_accessible_profile_contexts(user)
         data.update({
@@ -333,6 +356,11 @@ class SocialJWTSerializer(ProviderAuthSerializer):
             "user": user,
             "refresh": str(refresh),
             "access": str(access),
+            "authorization_context": issue_authorization_context(
+                user,
+                profile=profile_access.profile,
+                support_grant=profile_access.support_grant,
+            ),
             "id": user.id,
             "username": user.username,
             "is_verified": getattr(user, "is_verified", False),
@@ -420,6 +448,11 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
             support_grant=active_access.support_grant,
         )
         data["access"] = str(custom_access)
+        data["authorization_context"] = issue_authorization_context(
+            user,
+            profile=active_access.profile,
+            support_grant=active_access.support_grant,
+        )
         if "refresh" in data:
             data["refresh"] = str(custom_refresh)
 
@@ -470,25 +503,29 @@ class VerificationCodeSerializer(serializers.ModelSerializer):
 class UserCreateSerializer(BaseUserCreateSerializer):
     terms_accepted = serializers.BooleanField(write_only=True, required=True)
     privacy_accepted = serializers.BooleanField(write_only=True, required=True)
+    referral_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
         fields = (
             'id', 'email', 'first_name', 'last_name', 'password',
-            'terms_accepted', 'privacy_accepted',
+            'terms_accepted', 'privacy_accepted', 'referral_code',
         )
 
     def validate(self, attrs):
         # Remove consent-only fields before Djoser builds a User instance.
         attrs = validate_signup_consents(attrs)
-        return super().validate(attrs)
+        return _resolve_referrer(super().validate(attrs))
         
     def create(self, validated_data):
+        referrer = validated_data.pop('referrer_user', None)
+        validated_data.pop('referral_code', None)
         user = User.objects.create_user(
             email=validated_data['email'].lower(),
             password=validated_data['password'],
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', ''),
+            referred_by=referrer,
         )
         record_signup_consents(user, request=self.context.get("request"), source="djoser_signup")
         return user
@@ -519,6 +556,7 @@ class MyUserSerializer(serializers.ModelSerializer):
             'mfa_enabled',
             'has_setup_mfa',
             'profile',
+            'referral_code',
         )
         read_only_fields = (
             'id', 'get_full_name',
@@ -550,6 +588,7 @@ class OwnerRegistrationSerializer(serializers.Serializer):
     last_name = serializers.CharField(required=False, allow_blank=True)
     terms_accepted = serializers.BooleanField(write_only=True, required=True)
     privacy_accepted = serializers.BooleanField(write_only=True, required=True)
+    referral_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     def validate(self, attrs):
         attrs = validate_signup_consents(attrs)
@@ -558,15 +597,18 @@ class OwnerRegistrationSerializer(serializers.Serializer):
         validate_password(attrs["password"])
         if User.objects.filter(email=attrs["email"].lower()).exists():
             raise serializers.ValidationError({"email": "A user with this email already exists."})
-        return attrs
+        return _resolve_referrer(attrs)
 
     def create(self, validated_data):
         validated_data.pop("re_password")
+        referrer = validated_data.pop('referrer_user', None)
+        validated_data.pop('referral_code', None)
         user = User.objects.create_user(
             email=validated_data["email"].lower(),
             password=validated_data["password"],
             first_name=validated_data.get("first_name", ""),
             last_name=validated_data.get("last_name", ""),
+            referred_by=referrer,
         )
         record_signup_consents(user, request=self.context.get("request"), source="owner_signup")
         return user

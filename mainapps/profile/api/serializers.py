@@ -26,9 +26,9 @@ class APIStaffGroupSerializer(serializers.ModelSerializer):
     users_num=serializers.SerializerMethodField()
     class Meta:
         model = StaffGroup
-        fields = ['id','name','description','users_num','permission_num']
-        read_only_fields = ['id','users_num','permission_num']
-        
+        fields = ['id', 'name', 'platform', 'description', 'is_system', 'users_num', 'permission_num']
+        read_only_fields = ['id','is_system','users_num','permission_num']
+
     def get_users_num(self,obj):
         if obj.users.count():
             return obj.users.count()
@@ -44,20 +44,18 @@ class APIStaffRoleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StaffRole
-        fields = ['id','name','description','users_num','permission_num']
-        read_only_fields = ['id','users_num','permission_num']
+        fields = ['id', 'name', 'platform', 'description', 'is_system', 'users_num', 'permission_num']
+        read_only_fields = ['id','is_system','users_num','permission_num']
         
     def get_users_num(self,obj):
             return obj.assignments.count()
     def get_permission_num(self,obj):
         if obj.permissions.count():
             return obj.permissions.count()
-    
+
 class StaffRoleAssignmentSerializer(serializers.ModelSerializer):
     role_name=serializers.CharField(source='role.name',read_only=True)
     class Meta:
         model = StaffRoleAssignment
         fields = ['id','role_name','is_active','role','start_date','end_date']
         read_only_fields = ['id']
-        
-    

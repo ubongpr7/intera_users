@@ -1,5 +1,7 @@
 import os
 import random
+import secrets
+import string
 from datetime import timedelta
 from PIL import Image
 from django.db import models
@@ -32,6 +34,11 @@ SEX=(
 
 def get_upload_path(instance, filename):
     return os.path.join('images', 'avatar', str(instance.pk or "unknown"), filename)
+
+
+def generate_referral_code():
+    alphabet = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(12))
 
 
 
@@ -120,6 +127,20 @@ class User(AbstractUser):
     mfa_secret = models.CharField(max_length=255, blank=True, null=True)
     mfa_enabled = models.BooleanField(default=False)
     has_setup_mfa = models.BooleanField(default=False)
+    referral_code = models.CharField(
+        max_length=16,
+        unique=True,
+        editable=False,
+        default=generate_referral_code,
+        db_index=True,
+    )
+    referred_by = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='referred_users',
+    )
     
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
@@ -158,8 +179,7 @@ class User(AbstractUser):
             return self.picture.url
         except:
             no_picture = settings.MEDIA_URL + 'default.png'
-            return no_picture
-
+        return no_picture
 
     def delete(self, *args, **kwargs):
         if self.picture.url != settings.MEDIA_URL + 'default.png':
@@ -170,6 +190,46 @@ class User(AbstractUser):
     def role(self):
         assignment = self.roles.filter(is_active=True).select_related("role").first()
         return assignment.role.name if assignment else None
+
+
+class ReferralPayout(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        PAID = 'paid', 'Paid'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    referrer_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='referral_payouts',
+    )
+    referred_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='referred_payment_payouts',
+    )
+    commission_rate = models.DecimalField(max_digits=6, decimal_places=5, default='0.05000')
+    payment_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    payout_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='USD')
+    payment_reference = models.CharField(max_length=255, unique=True)
+    payment_id = models.CharField(max_length=255, blank=True)
+    profile_id = models.CharField(max_length=255, blank=True)
+    plan_slug = models.CharField(max_length=120, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+        indexes = [
+            models.Index(fields=('referrer_user', 'status')),
+            models.Index(fields=('referred_user',)),
+        ]
+
+    def __str__(self):
+        return f'{self.referrer_user.email}: {self.payout_amount} {self.currency}'
 
 
 class LegalConsent(models.Model):

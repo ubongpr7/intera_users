@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mainapps.permit.models import CombinedPermissions, CustomUserPermission
+from mainapps.permit.models import CombinedPermissions, CustomUserPermission, PlatformChoices
 
 from .models import CompanyProfile, StaffGroup, StaffRole
 
@@ -176,17 +176,22 @@ def get_default_staff_access_presets() -> list[StaffAccessPreset]:
     ]
 
 
-def _sync_presets_for_model(profile: CompanyProfile, model_cls):
+def _sync_presets_for_model(model_cls):
     created_count = 0
     updated_count = 0
     preset_names: list[str] = []
 
     for preset in get_default_staff_access_presets():
-        permissions = CustomUserPermission.objects.filter(codename__in=preset.permissions)
+        permissions = CustomUserPermission.objects.filter(
+            codename__in=preset.permissions,
+            platform=PlatformChoices.INTERA_IMS,
+        )
         obj, created = model_cls.objects.get_or_create(
             name=preset.name,
-            profile=profile,
-            defaults={"description": preset.description},
+            platform=PlatformChoices.INTERA_IMS,
+            is_system=True,
+            profile=None,
+            defaults={"description": preset.description, "created_by": None},
         )
 
         fields_to_update: list[str] = []
@@ -212,19 +217,29 @@ def _sync_presets_for_model(profile: CompanyProfile, model_cls):
 
 
 def sync_default_staff_roles(profile: CompanyProfile):
-    return _sync_presets_for_model(profile, StaffRole)
+    del profile
+    return sync_system_staff_roles()
 
 
 def sync_default_staff_groups(profile: CompanyProfile):
-    return _sync_presets_for_model(profile, StaffGroup)
+    del profile
+    return sync_system_staff_groups()
 
 
 def populate_default_staff_access(profile: CompanyProfile):
-    roles = sync_default_staff_roles(profile)
-    groups = sync_default_staff_groups(profile)
+    roles = sync_system_staff_roles()
+    groups = sync_system_staff_groups()
     return {
         "profile_id": str(profile.id),
         "profile_name": profile.name,
         "roles": roles,
         "groups": groups,
     }
+
+
+def sync_system_staff_roles():
+    return _sync_presets_for_model(StaffRole)
+
+
+def sync_system_staff_groups():
+    return _sync_presets_for_model(StaffGroup)

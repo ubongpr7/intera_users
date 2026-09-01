@@ -40,6 +40,30 @@ JWT_PRIVATE_KEY_PATH=/absolute/path/jwt_private.pem
 JWT_PUBLIC_KEY_PATH=/absolute/path/jwt_public.pem
 ```
 
+## Hosperator Notification Bridge
+
+`intera_users` remains the authority for staff groups, roles, permissions, and profile membership. Hosperator Notification may read an active group's current members only through this internal endpoint:
+
+```text
+GET /management/internal/profiles/{profile_id}/groups/{group_id}/members/
+Authorization: Bearer <HOSPERATOR_NOTIFICATION_SERVICE_TOKEN>
+```
+
+The endpoint accepts no end-user JWT fallback. It returns only `profile_id`, the opaque `group_id`, and sorted `member_user_ids`; it excludes inactive users, inactive memberships, groups outside the requested profile, and inactive groups. It never returns staff details, roles, or permissions. Responses are `Cache-Control: no-store` and groups over 200 eligible members return `409` rather than being silently truncated.
+
+Deploy the paired settings together:
+
+```env
+# intera_users
+HOSPERATOR_NOTIFICATION_SERVICE_TOKEN=<high-entropy-shared-secret>
+
+# hosperator-notification
+INTERA_USERS_GROUP_MEMBERS_URL_TEMPLATE=https://users.example/management/internal/profiles/{profile_id}/groups/{group_id}/members/
+INTERA_USERS_SERVICE_BEARER_TOKEN=<same-high-entropy-shared-secret>
+```
+
+The canonical response contract is maintained in Hosperator at `contracts/apis/intera_users.group_members.v1.schema.json`.
+
 ## Documentation
 - [API Documentation](/docs/api.md)
 - [Architecture Overview](/docs/architecture.md)

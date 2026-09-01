@@ -13,7 +13,8 @@ from django.db import transaction
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import filters, status, viewsets
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -24,6 +25,7 @@ from rest_framework.views import APIView
 from mainapps.accounts.api.serializers import MyUserSerializer
 from mainapps.common.settings import get_company_or_profile
 from mainapps.permit.permit import HasModelRequestPermission, PermissionRequiredMixin
+from mainapps.permit.models import PlatformChoices
 from subapps.kafka.producers import (
     build_actor,
     publish_support_access_grant_activated,
@@ -45,6 +47,7 @@ from subapps.kafka.producers.access_control import (
     user_display_name,
 )
 from subapps.email_system.emails import send_html_email
+from subapps.pagination import OptionalPageNumberPagination
 
 from .models import (
     CompanyMembership,
@@ -158,6 +161,16 @@ def _require_subscription_service_key(request):
         raise PermissionDenied("Invalid subscription service key.")
 
 
+def _require_hosperator_notification_service_token(request):
+    """Authenticate Notification's minimum-necessary group-membership read."""
+    expected = os.getenv("HOSPERATOR_NOTIFICATION_SERVICE_TOKEN", "")
+    authorization = str(request.headers.get("Authorization", "")).strip()
+    scheme, separator, supplied = authorization.partition(" ")
+    token = supplied.strip() if separator and scheme.lower() == "bearer" else ""
+    if not expected or not token or not secrets.compare_digest(expected, token):
+        raise PermissionDenied("Invalid Hosperator notification service token.")
+
+
 class InternalSubscriptionUsageView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -171,10 +184,57 @@ class InternalSubscriptionUsageView(APIView):
         return Response({"staff-users": _staff_usage(profile)})
 
 
+class InternalHosperatorGroupMembersView(APIView):
+    """Resolve one active group for Notification without exposing staff details or permissions."""
+
+    authentication_classes = []
+    permission_classes = []
+    _maximum_members = 200
+
+    def get(self, request, profile_id, group_id):
+        _require_hosperator_notification_service_token(request)
+        group = (
+            StaffGroup.objects.select_related("profile")
+            .filter(pk=group_id, profile_id=profile_id, is_active=True)
+            .first()
+        )
+        if group is None:
+            return Response({"detail": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Match StaffGroup membership rules: the profile owner or an active profile member only.
+        member_user_ids = list(
+            group.users.filter(is_active=True)
+            .filter(
+                Q(pk=group.profile.owner_id)
+                | Q(company_memberships__profile_id=profile_id, company_memberships__is_active=True)
+            )
+            .order_by("pk")
+            .values_list("pk", flat=True)
+            .distinct()[: self._maximum_members + 1]
+        )
+        if len(member_user_ids) > self._maximum_members:
+            return Response(
+                {"detail": "Group exceeds the operational notification membership limit."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        response = Response(
+            {
+                "profile_id": profile_id,
+                "group_id": str(group_id),
+                "member_user_ids": [str(user_id) for user_id in member_user_ids],
+            }
+        )
+        response["Cache-Control"] = "no-store"
+        return response
+
+
 class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = CompanyProfile.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    pagination_class = OptionalPageNumberPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     required_permission = {
         "list": "read_company",
         "retrieve": "read_company",
@@ -444,6 +504,8 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = CompanyInvitation.objects.select_related("profile", "invited_by", "accepted_by")
     serializer_class = CompanyInvitationSerializer
+    pagination_class = OptionalPageNumberPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
     required_permission = {
         "list": "manage_company_settings",
@@ -461,6 +523,19 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     ordering_fields = ["created_at", "updated_at", "expires_at"]
     ordering = ["-created_at"]
 
+    @staticmethod
+    def _expire_stale_pending(queryset):
+        now = timezone.now()
+        stale = queryset.filter(
+            status=CompanyInvitation.InvitationStatus.PENDING,
+            expires_at__lte=now,
+        )
+        stale.update(
+            status=CompanyInvitation.InvitationStatus.EXPIRED,
+            responded_at=now,
+            updated_at=now,
+        )
+
     def get_permissions(self):
         if self.action in {"accept", "decline", "mine"}:
             return [IsAuthenticated()]
@@ -471,18 +546,22 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         if self.action == "mine":
-            return queryset.filter(
+            queryset = queryset.filter(
                 email__iexact=self.request.user.email,
-                status=CompanyInvitation.InvitationStatus.PENDING,
             )
+            self._expire_stale_pending(queryset)
+            return queryset
 
         if self.request.user.is_staff:
+            self._expire_stale_pending(queryset)
             return queryset
 
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
-        return queryset.filter(profile=profile)
+        queryset = queryset.filter(profile=profile)
+        self._expire_stale_pending(queryset)
+        return queryset
 
     def perform_create(self, serializer):
         profile = _profile_from_request(self.request)
@@ -1291,6 +1370,8 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = StaffRole.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
+    pagination_class = OptionalPageNumberPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     required_permission = {
         "list": "manage_company_settings",
         "retrieve": "manage_company_settings",
@@ -1300,7 +1381,7 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         "destroy": "manage_company_settings",
     }
 
-    filterset_fields = ["is_active", "profile"]
+    filterset_fields = ["is_active", "profile", "platform"]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "created_at"]
     ordering = ["name"]
@@ -1315,13 +1396,19 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
-        return queryset.filter(profile=profile)
+        return queryset.filter(Q(profile=profile) | Q(is_system=True, profile__isnull=True))
 
     def perform_create(self, serializer):
         profile = _profile_from_request(self.request)
         if not profile:
             raise PermissionDenied("No company profile is linked to this account.")
-        role = serializer.save(profile=profile, created_by=self.request.user)
+        if StaffRole.objects.filter(
+            platform=serializer.validated_data.get("platform", PlatformChoices.INTERA_IMS),
+            name__iexact=serializer.validated_data["name"],
+            is_system=True,
+        ).exists():
+            raise ValidationError("That name is reserved for an Intera system role.")
+        role = serializer.save(profile=profile, created_by=self.request.user, is_system=False)
         transaction.on_commit(
             lambda: publish_role_changed(
                 actor=build_actor(request=self.request, user=self.request.user),
@@ -1333,6 +1420,8 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         role = self.get_object()
+        if role.is_system:
+            raise PermissionDenied("System roles are managed by Intera staff and cannot be edited.")
         before = {
             "role_name": role.name,
             "description": role.description or "",
@@ -1356,6 +1445,8 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        if instance.is_system:
+            raise PermissionDenied("System roles are managed by Intera staff and cannot be deleted.")
         actor = build_actor(request=self.request, user=self.request.user)
         transaction.on_commit(
             lambda: publish_role_changed(
@@ -1384,13 +1475,14 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def assign_user(self, request, pk=None):
         role = self.get_object()
+        active_profile = _profile_from_request(request)
         serializer = AssignUserToRoleSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         assignment = StaffRoleAssignment.objects.create(
             user_id=serializer.validated_data["user_id"],
             role=role,
-            profile=role.profile,
+            profile=active_profile,
             start_date=serializer.validated_data.get("start_date", timezone.now()),
             end_date=serializer.validated_data.get("end_date"),
             assigned_by=request.user,
@@ -1412,6 +1504,11 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = StaffRoleAssignment.objects.all()
     serializer_class = StaffRoleAssignmentSerializer
+    pagination_class = OptionalPageNumberPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ["is_active", "role", "user", "role__platform"]
+    ordering_fields = ["start_date", "end_date", "assigned_at"]
+    ordering = ["-assigned_at"]
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
     required_permission = {
         "list": "manage_company_settings",
@@ -1439,6 +1536,9 @@ class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet)
         if requested_profile and requested_profile.id != profile.id:
             raise PermissionDenied("Cross-profile assignment is not allowed.")
 
+        role = serializer.validated_data["role"]
+        if role.profile_id not in (None, profile.id) or (role.is_system and role.profile_id is not None):
+            raise PermissionDenied("Cross-profile role assignment is not allowed.")
         assignment = serializer.save(profile=profile, assigned_by=self.request.user)
         transaction.on_commit(
             lambda: publish_role_assignment_changed(
@@ -1494,6 +1594,8 @@ class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet)
 class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = StaffGroup.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
+    pagination_class = OptionalPageNumberPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     required_permission = {
         "list": "manage_company_settings",
         "retrieve": "manage_company_settings",
@@ -1503,7 +1605,7 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         "destroy": "manage_company_settings",
     }
 
-    filterset_fields = ["is_active", "profile"]
+    filterset_fields = ["is_active", "profile", "platform"]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "created_at"]
     ordering = ["name"]
@@ -1518,13 +1620,19 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
-        return queryset.filter(profile=profile)
+        return queryset.filter(Q(profile=profile) | Q(is_system=True, profile__isnull=True))
 
     def perform_create(self, serializer):
         profile = _profile_from_request(self.request)
         if not profile:
             raise PermissionDenied("No company profile is linked to this account.")
-        group = serializer.save(profile=profile, created_by=self.request.user)
+        if StaffGroup.objects.filter(
+            platform=serializer.validated_data.get("platform", PlatformChoices.INTERA_IMS),
+            name__iexact=serializer.validated_data["name"],
+            is_system=True,
+        ).exists():
+            raise ValidationError("That name is reserved for an Intera system group.")
+        group = serializer.save(profile=profile, created_by=self.request.user, is_system=False)
         transaction.on_commit(
             lambda: publish_group_changed(
                 actor=build_actor(request=self.request, user=self.request.user),
@@ -1536,6 +1644,8 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         group = self.get_object()
+        if group.is_system:
+            raise PermissionDenied("System groups are managed by Intera staff and cannot be edited.")
         before = {
             "group_name": group.name,
             "description": group.description or "",
@@ -1559,6 +1669,8 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        if instance.is_system:
+            raise PermissionDenied("System groups are managed by Intera staff and cannot be deleted.")
         actor = build_actor(request=self.request, user=self.request.user)
         transaction.on_commit(
             lambda: publish_group_changed(
@@ -1586,6 +1698,7 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def add_user(self, request, pk=None):
         group = self.get_object()
+        active_profile = _profile_from_request(request)
         user_id = request.data.get("user_id")
         if not user_id:
             return Response(
@@ -1597,10 +1710,10 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         is_member = (
             user
             and (
-                group.profile.owner_id == user.id
+                active_profile.owner_id == user.id
                 or CompanyMembership.objects.filter(
                     user=user,
-                    profile=group.profile,
+                    profile=active_profile,
                     is_active=True,
                 ).exists()
             )
@@ -1610,12 +1723,12 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 {"error": "User does not belong to this profile"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        before_groups = _group_names(user.staff_groups.filter(profile=group.profile))
+        before_groups = _group_names(user.staff_groups.filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True)))
         group.users.add(user)
-        after_groups = _group_names(user.staff_groups.filter(profile=group.profile))
+        after_groups = _group_names(user.staff_groups.filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True)))
         transaction.on_commit(
             lambda: publish_user_groups_updated(
-                profile=group.profile,
+                profile=active_profile,
                 actor=build_actor(request=request, user=request.user),
                 user=user,
                 before_groups=before_groups,
@@ -1627,6 +1740,7 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def remove_user(self, request, pk=None):
         group = self.get_object()
+        active_profile = _profile_from_request(request)
         user_id = request.data.get("user_id")
         if not user_id:
             return Response(
@@ -1638,10 +1752,10 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         is_member = (
             user
             and (
-                group.profile.owner_id == user.id
+                active_profile.owner_id == user.id
                 or CompanyMembership.objects.filter(
                     user=user,
-                    profile=group.profile,
+                    profile=active_profile,
                     is_active=True,
                 ).exists()
             )
@@ -1651,12 +1765,12 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 {"error": "User does not belong to this profile"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        before_groups = _group_names(user.staff_groups.filter(profile=group.profile))
+        before_groups = _group_names(user.staff_groups.filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True)))
         group.users.remove(user)
-        after_groups = _group_names(user.staff_groups.filter(profile=group.profile))
+        after_groups = _group_names(user.staff_groups.filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True)))
         transaction.on_commit(
             lambda: publish_user_groups_updated(
-                profile=group.profile,
+                profile=active_profile,
                 actor=build_actor(request=request, user=request.user),
                 user=user,
                 before_groups=before_groups,

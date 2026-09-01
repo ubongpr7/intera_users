@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from mainapps.accounts.models import User
 from mainapps.profile.models import StaffGroup, StaffRole, StaffRoleAssignment
-from mainapps.permit.models import CustomUserPermission
+from mainapps.permit.models import CustomUserPermission, PlatformChoices
 
 class PermissionDetailSerializer(serializers.ModelSerializer):
     has_permission = serializers.BooleanField(read_only=True)
@@ -9,10 +9,16 @@ class PermissionDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CustomUserPermission
-        fields = ('codename', 'name', 'description', 'category', 'has_permission')
+        fields = ('platform', 'codename', 'name', 'description', 'category', 'has_permission')
 
 
 class UserPermissionUpdateSerializer(serializers.ModelSerializer):
+    platform = serializers.ChoiceField(
+        choices=PlatformChoices.choices,
+        required=False,
+        default=PlatformChoices.INTERA_IMS,
+        write_only=True,
+    )
     permissions = serializers.ListField(
         child=serializers.CharField(),
         write_only=True,
@@ -21,9 +27,15 @@ class UserPermissionUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('permissions',)
+        fields = ('platform', 'permissions',)
 
 class GroupPermissionUpdateSerializer(serializers.ModelSerializer):
+    platform = serializers.ChoiceField(
+        choices=PlatformChoices.choices,
+        required=False,
+        default=PlatformChoices.INTERA_IMS,
+        write_only=True,
+    )
     permissions = serializers.ListField(
         child=serializers.CharField(),
         write_only=True,
@@ -32,8 +44,14 @@ class GroupPermissionUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StaffGroup
-        fields = ('permissions',)
+        fields = ('platform', 'permissions',)
 class RolePermissionUpdateSerializer(serializers.ModelSerializer):
+    platform = serializers.ChoiceField(
+        choices=PlatformChoices.choices,
+        required=False,
+        default=PlatformChoices.INTERA_IMS,
+        write_only=True,
+    )
     permissions = serializers.ListField(
         child=serializers.CharField(),
         write_only=True,
@@ -42,7 +60,7 @@ class RolePermissionUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StaffRole
-        fields = ('permissions',)
+        fields = ('platform', 'permissions',)
 
 
 
@@ -52,10 +70,16 @@ class GroupDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StaffGroup
-        fields = ('id', 'name',  'belongs_to')
+        fields = ('id', 'name', 'platform', 'is_system', 'belongs_to')
 
 
 class UserGroupUpdateSerializer(serializers.ModelSerializer):
+    platform = serializers.ChoiceField(
+        choices=PlatformChoices.choices,
+        required=False,
+        default=PlatformChoices.INTERA_IMS,
+        write_only=True,
+    )
     groups = serializers.ListField(
         child=serializers.CharField(),
         write_only=True,
@@ -64,7 +88,7 @@ class UserGroupUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('groups',)
+        fields = ('platform', 'groups',)
 
 
 class RoleAssignmentSerializer(serializers.ModelSerializer):
@@ -77,7 +101,7 @@ class RoleAssignmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = StaffRoleAssignment
         fields = '__all__'
-        read_only_fields = ('id', 'assigned_at','assigned_by')
+        read_only_fields = ('id', 'profile', 'assigned_at','assigned_by')
         extra_kwargs = {
             'role': {'required': True},
             'user': {'required': True}
@@ -96,4 +120,3 @@ class RoleAssignmentSerializer(serializers.ModelSerializer):
             **validated_data
         )
         return instance
-    

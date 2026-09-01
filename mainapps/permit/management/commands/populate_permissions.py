@@ -2,7 +2,12 @@ from django.core.management import BaseCommand
 from django.db import transaction
 from django.utils.text import slugify
 
-from mainapps.permit.models import CombinedPermissions, CustomUserPermission, PermissionCategory
+from mainapps.permit.models import (
+    CombinedPermissions,
+    CustomUserPermission,
+    PermissionCategory,
+    PlatformChoices,
+)
 
 class Command(BaseCommand):
     help = 'Populates the database with all permissions and their categories'
@@ -11,7 +16,12 @@ class Command(BaseCommand):
         self.stdout.write("Starting permission population...")
         
         # Get all existing permissions once for comparison
-        existing_perms = set(CustomUserPermission.objects.values_list('codename', 'category__name'))
+        existing_perms = set(
+            CustomUserPermission.objects.filter(platform=PlatformChoices.INTERA_IMS).values_list(
+                'codename',
+                'category__name',
+            )
+        )
         
         # Create buffer for batch operations
         permissions_to_create = []
@@ -26,7 +36,8 @@ class Command(BaseCommand):
                 if category_name not in categories_to_create:
                     category, created = PermissionCategory.objects.get_or_create(
                         name=category_name,
-                        defaults={'description': f"{category_name} related permissions"}
+                        platform=PlatformChoices.INTERA_IMS,
+                        defaults={'description': f"{category_name} related permissions"},
                     )
                     categories_to_create[category_name] = category
                 
@@ -36,6 +47,7 @@ class Command(BaseCommand):
                 if (codename, category.name) not in existing_perms:
                     permissions_to_create.append(CustomUserPermission(
                         codename=codename,
+                        platform=PlatformChoices.INTERA_IMS,
                         category=category,
                         description=label  # Use label as description
                     ))

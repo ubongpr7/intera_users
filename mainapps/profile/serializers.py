@@ -26,10 +26,12 @@ class CompanyProfileAddressSerializer(serializers.ModelSerializer):
     region_name = serializers.SerializerMethodField()
     subregion_name = serializers.SerializerMethodField()
     city_name = serializers.SerializerMethodField()
+    address_id = serializers.UUIDField(source='shared_address_id', read_only=True)
     
     class Meta:
         model = CompanyProfileAddress
         fields = '__all__'
+        extra_fields = ['address_id']
         read_only_fields = ['profile']
 
     @staticmethod
@@ -97,7 +99,7 @@ class StaffRoleListSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = StaffRole
-        fields = ['id', 'name', 'description',  'assignments_count', 'created_at','permission_count']
+        fields = ['id', 'name', 'platform', 'description', 'is_system', 'assignments_count', 'created_at', 'permission_count']
     
     def get_assignments_count(self, obj):
         return obj.assignments.count() or 0
@@ -115,7 +117,7 @@ class StaffRoleSerializer(serializers.ModelSerializer):
     class Meta:
         model = StaffRole
         fields = '__all__'
-        read_only_fields = ['profile', 'created_by']
+        read_only_fields = ['profile', 'created_by', 'is_system']
     
     def get_assignments_count(self, obj):
         return obj.assignments.count()
@@ -130,7 +132,7 @@ class StaffGroupListSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = StaffGroup
-        fields = ['id', 'name', 'description',  'users_count', 'created_at','permission_count']
+        fields = ['id', 'name', 'platform', 'description', 'is_system', 'users_count', 'created_at', 'permission_count']
     
     def get_users_count(self, obj):
         return obj.users.count()
@@ -147,7 +149,7 @@ class StaffGroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = StaffGroup
         fields = '__all__'
-        read_only_fields = ['profile', 'created_by']
+        read_only_fields = ['profile', 'created_by', 'is_system']
     
     def get_users_count(self, obj):
         return obj.users.count()

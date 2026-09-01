@@ -14,5 +14,6 @@ urlpatterns = [
     path("mfa/verify/", views.MfaVerifyView.as_view(), name="mfa-verify"),
     path("mfa/reset/request/", views.MfaResetRequestView.as_view(), name="mfa-reset-request"),
     path("mfa/reset/confirm/", views.MfaResetConfirmView.as_view(), name="mfa-reset-confirm"),
+    path("websocket-ticket/", views.WebSocketTicketView.as_view(), name="websocket-ticket"),
     path("mfa/toggle/", views.MfaToggleView.as_view(), name="mfa-toggle"),
 ]

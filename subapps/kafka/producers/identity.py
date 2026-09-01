@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cities_light.models import City, Country, Region, SubRegion
 from mainapps.accounts.models import User
 from mainapps.profile.models import CompanyMembership, CompanyProfile
 from subapps.kafka.client import publish_event
@@ -25,12 +26,44 @@ def _serialize_user(user: User) -> dict[str, Any]:
     }
 
 
+def _geography_name(model, value: Any) -> str:
+    """Publish readable location values rather than cities-light primary keys."""
+    if value in (None, ""):
+        return ""
+    try:
+        return model.objects.only("name").get(id=int(value)).name
+    except (TypeError, ValueError, model.DoesNotExist):
+        return str(value).strip()
+
+
+def _serialize_headquarters_address(profile: CompanyProfile) -> dict[str, Any]:
+    address = getattr(profile, "headquarters_address", None)
+    if address is None:
+        return {}
+    return {
+        "street_number": address.street_number,
+        "street": str(address.street or "").strip(),
+        "apt_number": address.apt_number,
+        "city": _geography_name(City, address.city),
+        "subregion": _geography_name(SubRegion, address.subregion),
+        "region": _geography_name(Region, address.region),
+        "country": _geography_name(Country, address.country),
+        "postal_code": str(address.postal_code or "").strip(),
+    }
+
+
 def _serialize_company_profile(profile: CompanyProfile) -> dict[str, Any]:
     display_name = profile.name or profile.company_code or str(profile.id)
+    headquarters_address = getattr(profile, "headquarters_address", None)
     return {
         "profile_id": profile.id,
         "company_code": profile.company_code,
         "display_name": display_name,
+        "logo_url": profile.logo.url if getattr(profile, "logo", None) else "",
+        # Keep the legacy snapshot during the compatibility window. Consumers should
+        # use the opaque shared ID for address resolution going forward.
+        "headquarters_address_id": str(headquarters_address.shared_address_id) if headquarters_address and headquarters_address.shared_address_id else None,
+        "headquarters_address": _serialize_headquarters_address(profile),
         "industry": profile.industry,
         "owner_user_id": profile.owner_id,
         "is_active": True,

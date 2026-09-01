@@ -11,15 +11,32 @@ class ServiceChoices(models.TextChoices):
     # product_inventory='product_inventory',_('Product inventory') 
 
 
+class PlatformChoices(models.TextChoices):
+    INTERA_IMS = "intera_ims", _("Intera IMS")
+    HOSPERATOR = "hosperator", _("Hosperator")
+
+
 class PermissionCategory(models.Model):
-    name = models.CharField(max_length=50, unique=True)
+    platform = models.CharField(
+        max_length=32,
+        choices=PlatformChoices.choices,
+        default=PlatformChoices.INTERA_IMS,
+        db_index=True,
+    )
+    name = models.CharField(max_length=50)
     description = models.TextField(blank=True)
     icon = models.CharField(max_length=30, blank=True)
     service= models.CharField(max_length=255, choices=ServiceChoices.choices,default=ServiceChoices.accommodation)
     
     class Meta:
         verbose_name_plural = "Permission Categories"
-        ordering = ['name']
+        ordering = ['platform', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['platform', 'name'],
+                name='unique_permission_category_per_platform',
+            )
+        ]
         
 
     def __str__(self):
@@ -218,10 +235,15 @@ class CombinedPermissions(models.TextChoices):
     VIEW_STOCK_LOCATION_REPORTS = 'view_stock_location_reports', _('Can view stock location reports')
 
 class CustomUserPermission(models.Model):
+    platform = models.CharField(
+        max_length=32,
+        choices=PlatformChoices.choices,
+        default=PlatformChoices.INTERA_IMS,
+        db_index=True,
+        help_text="Product platform that owns this permission.",
+    )
     codename = models.CharField(
         max_length=100,
-        unique=True,
-        choices=CombinedPermissions.choices,
         help_text="Technical permission identifier"
     )
     name = models.CharField(
@@ -239,23 +261,32 @@ class CustomUserPermission(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=['codename']),
+            models.Index(fields=['platform', 'codename']),
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=['category', 'codename'],
-                name='unique_permission_per_category'
+                fields=['platform', 'codename'],
+                name='unique_permission_codename_per_platform',
             )
         ]
-        ordering = ['category', 'codename']
+        ordering = ['platform', 'category', 'codename']
 
 
     def __str__(self):
         return f"{self.category.name.replace(' ', '_')}.{self.codename}"
 
+    def clean(self):
+        if self.category_id and self.category.platform != self.platform:
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError({"category": "Permission category must belong to the same platform."})
+
     def save(self, *args, **kwargs):
-        """Auto-populate name from CombinedPermissions choice label"""
+        """Auto-populate known legacy permission labels and validate platform ownership."""
         if not self.name:
-            # Get human-readable name from TextChoices
-            self.name = CombinedPermissions(self.codename).label
+            try:
+                self.name = CombinedPermissions(self.codename).label
+            except ValueError:
+                self.name = self.codename.replace(".", " ").replace("_", " ").title()
+        self.clean()
         super().save(*args, **kwargs)

@@ -12,6 +12,7 @@ from .views import (
     StaffGroupViewSet,
     CompanyProfileAddressViewSet,
     SupportAccessGrantViewSet,
+    InternalHosperatorGroupMembersView,
     InternalSubscriptionUsageView,
 )
 
@@ -32,6 +33,11 @@ router.register(r'reorder-strategies', ReorderStrategyViewSet, basename='reorder
 router.register(r'inventory-policies', InventoryPolicyViewSet, basename='inventory-policy')
 
 urlpatterns = [
+    path(
+        'internal/profiles/<int:profile_id>/groups/<int:group_id>/members/',
+        InternalHosperatorGroupMembersView.as_view(),
+        name='internal-hosperator-group-members',
+    ),
     path('internal/subscription-usage/', InternalSubscriptionUsageView.as_view(), name='internal-subscription-usage'),
     path('', include(router.urls)),
     path(

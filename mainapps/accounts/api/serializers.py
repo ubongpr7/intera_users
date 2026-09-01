@@ -9,17 +9,31 @@ from mainapps.accounts.legal import record_signup_consents, validate_signup_cons
 from django.contrib.auth.password_validation import validate_password
 
 
+def _resolve_referrer(attrs):
+    code = (attrs.get('referral_code') or '').strip().upper()
+    attrs['referral_code'] = code
+    if not code:
+        attrs['referrer_user'] = None
+        return attrs
+    referrer = User.objects.filter(referral_code__iexact=code).first()
+    if referrer is None:
+        raise serializers.ValidationError({'referral_code': 'Referral code is invalid.'})
+    attrs['referrer_user'] = referrer
+    return attrs
+
+
 class RootUserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True,)
     re_password = serializers.CharField(write_only=True, required=True)
     terms_accepted = serializers.BooleanField(write_only=True, required=True)
     privacy_accepted = serializers.BooleanField(write_only=True, required=True)
+    referral_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = User
         fields = (
             'first_name', 'email', 'password', 're_password',
-            'terms_accepted', 'privacy_accepted',
+            'terms_accepted', 'privacy_accepted', 'referral_code',
         )
         extra_kwargs = {
             'first_name': {'required': True},
@@ -29,7 +43,12 @@ class RootUserCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop("re_password", None)
+        referrer = validated_data.pop('referrer_user', None)
+        validated_data.pop('referral_code', None)
         user = User.objects.create_user(**validated_data)
+        if referrer is not None:
+            user.referred_by = referrer
+            user.save(update_fields=['referred_by'])
         record_signup_consents(user, request=self.context.get("request"), source="root_signup")
         return user
     
@@ -40,7 +59,7 @@ class RootUserCreateSerializer(serializers.ModelSerializer):
         if password != re_password:
             raise serializers.ValidationError({"re_password": "Passwords do not match"})
         validate_password(password)
-        return attrs
+        return _resolve_referrer(attrs)
 
 class StaffUserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
@@ -73,7 +92,7 @@ class MyUserSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'email', 'first_name', 'last_name', 'phone', 'picture', 'sex',
             'is_verified', 'is_staff',
-            'date_of_birth', 'profile', 'custom_permissions', 'roles',
+            'date_of_birth', 'profile', 'custom_permissions', 'roles', 'referral_code',
         ]
         read_only_fields = ['id', 'is_verified', 'is_staff']
         extra_kwargs = {'email': {'required': True}}
