@@ -419,7 +419,8 @@ _default_cors_allowed_origins = [
     'http://10.0.2.2:8080',
 
 ]
-CORS_ALLOWED_ORIGINS = _split_csv_env("CORS_ALLOWED_ORIGINS", _default_cors_allowed_origins)
+_configured_cors_allowed_origins = _split_csv_env("CORS_ALLOWED_ORIGINS", [])
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys([*_default_cors_allowed_origins, *_configured_cors_allowed_origins]))
 
 _default_csrf_trusted_origins = sorted(set(CORS_ALLOWED_ORIGINS + [
     "https://accounts.interaims.com",
