@@ -393,6 +393,7 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
     'X-profile-id',  
+    'x-intera-authorization-context',
     'x-device-id',
 ]
 
