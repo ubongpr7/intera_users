@@ -399,8 +399,10 @@ CORS_ALLOW_HEADERS = [
 
 _default_cors_allowed_origins = [
     "http://localhost:3000",
+    "http://localhost:3005",
     "http://localhost:8001",
     "http://127.0.0.1:3000",
+    "http://127.0.0.1:3005",
     'http://3.212.68.52:3000',
     "https://intera-inventory.vercel.app",
     "http://3.84.22.207:3000",
