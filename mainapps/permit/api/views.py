@@ -92,6 +92,8 @@ class RoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     required_permission = "manage_company_settings"
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return self.queryset.none()
         active_profile = _profile_from_request(self.request)
         membership_user_ids = CompanyMembership.objects.filter(
             profile=active_profile,
@@ -158,6 +160,8 @@ class UserAccessViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     required_permission = "manage_company_settings"
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return self.queryset.none()
         active_profile = _profile_from_request(self.request)
         return (
             super()
@@ -271,6 +275,8 @@ class GroupAccessViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     required_permission = "manage_company_settings"
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return self.queryset.none()
         active_profile = _profile_from_request(self.request)
         return super().get_queryset().filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True))
 
@@ -325,6 +331,8 @@ class RoleAccessViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     required_permission = "manage_company_settings"
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return self.queryset.none()
         active_profile = _profile_from_request(self.request)
         return super().get_queryset().filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True))
 

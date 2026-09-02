@@ -280,6 +280,8 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         if self.request.user.is_staff:
             return queryset
 
@@ -545,6 +547,8 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         if self.action == "mine":
             queryset = queryset.filter(
                 email__iexact=self.request.user.email,
@@ -1117,6 +1121,8 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         if self.action == "mine":
             expire_support_grants(user=self.request.user)
             return queryset.filter(
@@ -1135,6 +1141,8 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
+        if getattr(self, "swagger_fake_view", False):
+            return context
         if self.action not in {"mine", "accept", "decline"}:
             context["profile"] = _profile_from_request(self.request)
         return context
@@ -1393,6 +1401,8 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
@@ -1522,6 +1532,8 @@ class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet)
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         profile = _profile_from_request(self.request)
         if profile:
             return queryset.filter(profile=profile)
@@ -1617,6 +1629,8 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
@@ -1800,6 +1814,8 @@ class CompanyProfileAddressViewSet(PermissionRequiredMixin, viewsets.ModelViewSe
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
@@ -1837,6 +1853,8 @@ class RecallPolicyViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
@@ -1869,6 +1887,8 @@ class ReorderStrategyViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
@@ -1916,6 +1936,8 @@ class InventoryPolicyViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
         profile = _profile_from_request(self.request)
         if profile:
             queryset = queryset.filter(profile=profile)

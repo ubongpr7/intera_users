@@ -12,6 +12,7 @@ from django.db.models import Q
 from rest_framework.exceptions import AuthenticationFailed
 
 from mainapps.profile.models import CompanyMembership
+from mainapps.permit.models import PlatformChoices
 
 AUTHORIZATION_CONTEXT_HEADER = "X-Intera-Authorization-Context"
 AUTHORIZATION_CONTEXT_TOKEN_TYPE = "intera_authorization_context"
@@ -52,10 +53,11 @@ def _lifetime() -> timedelta:
     )
 
 
-def access_context_hash(*, user_id, profile_id, session_version) -> str:
+def access_context_hash(*, user_id, profile_id, session_version, platform=PlatformChoices.INTERA_IMS) -> str:
     value = json.dumps(
         {
             "profile_id": str(profile_id or ""),
+            "platform": str(platform or PlatformChoices.INTERA_IMS),
             "session_version": str(session_version or ""),
             "user_id": str(user_id or ""),
         },
@@ -70,12 +72,14 @@ def _wildcard_name(name: str) -> str:
     return f"system:{slug}"
 
 
-def _system_access(user, profile):
+def _system_access(user, profile, platform):
     role_filter = Q(profile=profile) | Q(role__is_system=True, profile__isnull=True)
     assignments = user.roles.filter(role_filter, is_active=True).select_related("role").prefetch_related("role__permissions")
+    assignments = assignments.filter(role__platform=platform)
     groups = user.staff_groups.filter(
         Q(profile=profile) | Q(is_system=True, profile__isnull=True),
         is_active=True,
+        platform=platform,
     ).prefetch_related("permissions")
     wildcards: set[str] = set()
     wildcard_permissions: dict[str, list[str]] = {}
@@ -98,18 +102,20 @@ def _system_access(user, profile):
     return sorted(wildcards), wildcard_permissions
 
 
-def issue_authorization_context(user, *, profile=None, support_grant=None) -> str:
+def issue_authorization_context(user, *, profile=None, support_grant=None, platform=PlatformChoices.INTERA_IMS) -> str:
     now = datetime.now(timezone.utc)
-    direct_permissions = set(user.custom_permissions.values_list("codename", flat=True))
+    direct_permissions = set(
+        user.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
+    )
     if profile is not None and support_grant is None:
         membership = CompanyMembership.objects.filter(user=user, profile=profile, is_active=True).first()
         if membership:
             direct_permissions.update(
-                membership.custom_permissions.values_list("codename", flat=True)
+                membership.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
             )
     if support_grant is not None:
         direct_permissions.update(support_grant.effective_permission_codenames())
-    wildcards, wildcard_permissions = _system_access(user, profile) if profile is not None else ([], {})
+    wildcards, wildcard_permissions = _system_access(user, profile, platform) if profile is not None else ([], {})
     payload = {
         "token_type": AUTHORIZATION_CONTEXT_TOKEN_TYPE,
         "jti": str(uuid4()),
@@ -120,11 +126,13 @@ def issue_authorization_context(user, *, profile=None, support_grant=None) -> st
         "aud": _audience(),
         "user_id": str(user.id),
         "profile_id": str(profile.id) if profile else None,
+        "platform": platform,
         "session_version": getattr(user, "session_version", None),
         "access_context_hash": access_context_hash(
             user_id=user.id,
             profile_id=profile.id if profile else None,
             session_version=getattr(user, "session_version", None),
+            platform=platform,
         ),
         "is_staff": bool(user.is_staff),
         "is_superuser": bool(user.is_superuser),
@@ -149,6 +157,7 @@ def issue_websocket_ticket(context_payload: dict) -> str:
         "aud": _audience(),
         "user_id": context_payload.get("user_id"),
         "profile_id": context_payload.get("profile_id"),
+        "platform": context_payload.get("platform", PlatformChoices.INTERA_IMS),
         "access_context_hash": context_payload.get("access_context_hash"),
         "is_staff": bool(context_payload.get("is_staff")),
         "is_owner": bool(context_payload.get("is_owner")),
@@ -185,6 +194,7 @@ def authorization_context_from_request(request) -> dict:
         user_id=getattr(request.user, "id", None) or access_payload.get("user_id"),
         profile_id=access_payload.get("profile_id"),
         session_version=access_payload.get("session_version"),
+        platform=access_payload.get("platform", PlatformChoices.INTERA_IMS),
     )
     if payload.get("access_context_hash") != expected:
         raise AuthenticationFailed("Authorization context does not match the access token.")

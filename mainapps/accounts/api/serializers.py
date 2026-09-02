@@ -96,6 +96,7 @@ class MyUserSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'is_verified', 'is_staff']
         extra_kwargs = {'email': {'required': True}}
+        ref_name = "AccountsApiMyUser"
     
     def get_roles(self, obj):
         active_assignments = obj.roles.filter(is_active=True)

@@ -12,6 +12,7 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer as BaseT
 
 from djoser.social.serializers import ProviderAuthSerializer
 from mainapps.profile.models import CompanyMembership, CompanyProfile
+from mainapps.permit.models import PlatformChoices
 from mainapps.accounts.legal import record_signup_consents, validate_signup_consents
 from mainapps.profile.support_access import (
     list_accessible_profile_contexts,
@@ -38,6 +39,12 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     profile_id = serializers.IntegerField(required=False, write_only=True)
     company_code = serializers.CharField(required=False, write_only=True, allow_blank=True)
     support_access_grant_id = serializers.UUIDField(required=False, write_only=True)
+    platform = serializers.ChoiceField(
+        choices=PlatformChoices.choices,
+        required=False,
+        write_only=True,
+        default=PlatformChoices.INTERA_IMS,
+    )
 
     @classmethod
     def _active_memberships(cls, user):
@@ -121,12 +128,14 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         ).profile
 
     @classmethod
-    def get_all_permissions(cls, user, profile=None, support_grant=None):
+    def get_all_permissions(cls, user, profile=None, support_grant=None, platform=PlatformChoices.INTERA_IMS):
         if support_grant is not None:
             return support_grant.effective_permission_codenames()
 
         user_perms = set()
-        user_perms.update(user.custom_permissions.all().values_list("codename", flat=True))
+        user_perms.update(
+            user.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
+        )
         if not profile:
             return sorted(user_perms)
 
@@ -135,6 +144,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             for assignment in user.roles.filter(
                 Q(profile=profile) | Q(role__is_system=True, role__profile__isnull=True),
                 is_active=True,
+                role__platform=platform,
             ).select_related("role"):
                 if assignment.end_date and assignment.end_date < current_time:
                     assignment.is_active = False
@@ -150,6 +160,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             groups = user.staff_groups.filter(
                 Q(profile=profile) | Q(is_system=True, profile__isnull=True),
                 is_active=True,
+                platform=platform,
             )
             for group in groups:
                 user_perms.update(group.permissions.all().values_list("codename", flat=True))
@@ -162,7 +173,9 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             is_active=True,
         ).first()
         if membership:
-            user_perms.update(membership.custom_permissions.values_list("codename", flat=True))
+            user_perms.update(
+                membership.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
+            )
 
         return sorted(user_perms)
 
@@ -205,7 +218,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         }
 
     @classmethod
-    def _apply_claims(cls, token, user, profile, support_grant=None):
+    def _apply_claims(cls, token, user, profile, support_grant=None, platform=PlatformChoices.INTERA_IMS):
         token["profile_id"] = str(profile.id) if profile else None
         token["company_code"] = profile.company_code if profile else None
         token["profile_industry"] = profile.industry if profile else None
@@ -215,6 +228,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["mfa_enabled"] = bool(getattr(user, "mfa_enabled", False))
         token["has_setup_mfa"] = bool(getattr(user, "has_setup_mfa", False))
         token["owner_id"] = str(profile.owner_id) if profile and profile.owner_id else None
+        token["platform"] = platform
 
         role = None
         if support_grant is not None:
@@ -243,10 +257,11 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["mfa_verified"] = bool(getattr(user, "_jwt_mfa_verified", False))
 
     @classmethod
-    def issue_tokens_for_profile(cls, user, profile, mfa_verified=False, support_grant=None):
+    def issue_tokens_for_profile(cls, user, profile, mfa_verified=False, support_grant=None, platform=PlatformChoices.INTERA_IMS):
         setattr(user, "_jwt_active_profile", profile)
         setattr(user, "_jwt_mfa_verified", bool(mfa_verified))
         setattr(user, "_jwt_support_grant", support_grant)
+        setattr(user, "_jwt_platform", platform)
         try:
             refresh = cls.get_token(user)
             access = refresh.access_token
@@ -260,17 +275,20 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
                 delattr(user, "_jwt_mfa_verified")
             if hasattr(user, "_jwt_support_grant"):
                 delattr(user, "_jwt_support_grant")
+            if hasattr(user, "_jwt_platform"):
+                delattr(user, "_jwt_platform")
 
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
         profile = getattr(user, "_jwt_active_profile", None)
         support_grant = getattr(user, "_jwt_support_grant", None)
+        platform = getattr(user, "_jwt_platform", None) or PlatformChoices.INTERA_IMS
         if profile is None and user.profile_id:
             access = cls.resolve_active_profile_access(user, profile_id=user.profile_id)
             profile = access.profile
             support_grant = access.support_grant
-        cls._apply_claims(token, user, profile, support_grant=support_grant)
+        cls._apply_claims(token, user, profile, support_grant=support_grant, platform=platform)
         return token
 
     def validate(self, attrs):
@@ -292,6 +310,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             profile,
             mfa_verified=False,
             support_grant=access.support_grant,
+            platform=attrs.get("platform", PlatformChoices.INTERA_IMS),
         )
         if access.support_grant is not None:
             publish_support_access_workspace_entered(
@@ -308,6 +327,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             user,
             profile=profile,
             support_grant=access.support_grant,
+            platform=attrs.get("platform", PlatformChoices.INTERA_IMS),
         )
 
         accessible_profiles = self.list_accessible_profile_contexts(user)
@@ -410,11 +430,13 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
 
         active_access = None
         mfa_verified_claim = False
+        platform = PlatformChoices.INTERA_IMS
         if raw_refresh:
             try:
                 refresh_payload = RefreshToken(raw_refresh)
                 mfa_verified_claim = bool(refresh_payload.get("mfa_verified"))
                 profile_id = refresh_payload.get("profile_id")
+                platform = refresh_payload.get("platform", PlatformChoices.INTERA_IMS)
                 support_access_grant_id = refresh_payload.get("support_access_grant_id")
                 if support_access_grant_id:
                     active_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
@@ -446,12 +468,14 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
             active_access.profile,
             mfa_verified=mfa_verified,
             support_grant=active_access.support_grant,
+            platform=platform,
         )
         data["access"] = str(custom_access)
         data["authorization_context"] = issue_authorization_context(
             user,
             profile=active_access.profile,
             support_grant=active_access.support_grant,
+            platform=platform,
         )
         if "refresh" in data:
             data["refresh"] = str(custom_refresh)
@@ -561,6 +585,7 @@ class MyUserSerializer(serializers.ModelSerializer):
         read_only_fields = (
             'id', 'get_full_name',
         )
+        ref_name = "AccountsCoreMyUser"
 
     def get_picture(self, obj):
         return obj.get_picture()

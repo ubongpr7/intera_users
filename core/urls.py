@@ -17,10 +17,8 @@ schema_view = get_schema_view(
    openapi.Info(
       title="Intera API Users",
       default_version='v1',
-      description="Test description",
-      terms_of_service="https://www.google.com/policies/terms/",
-      contact=openapi.Contact(email="contact@snippets.local"),
-      license=openapi.License(name="BSD License"),
+      description="Authentication, MFA, workspace, staff, roles, groups, permissions, and shared identity APIs for Intera.",
+      contact=openapi.Contact(email="platform@intera.technology"),
    ),
    public=True,
    permission_classes=(permissions.AllowAny,),
