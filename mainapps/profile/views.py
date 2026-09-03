@@ -9,7 +9,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
@@ -1431,6 +1431,7 @@ class TrustedWorkspaceDeviceViewSet(PermissionRequiredMixin, viewsets.ModelViewS
         "retrieve": "hosperator.device_binding.manage",
         "create": "hosperator.device_binding.manage",
         "revoke": "hosperator.device_binding.manage",
+        "reactivate": "hosperator.device_binding.manage",
     }
 
     def get_permissions(self):
@@ -1477,13 +1478,58 @@ class TrustedWorkspaceDeviceViewSet(PermissionRequiredMixin, viewsets.ModelViewS
             )
         )
 
+    def create(self, request, *args, **kwargs):
+        """Return a recoverable conflict instead of leaking a uniqueness 500."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profile = _profile_from_request(request)
+        platform = serializer.validated_data.get("platform", PlatformChoices.HOSPERATOR)
+        device_identifier = serializer.validated_data["device_identifier"]
+        existing = TrustedWorkspaceDevice.objects.filter(
+            profile=profile,
+            platform=platform,
+            device_identifier=device_identifier,
+        ).first()
+        if existing is not None:
+            return self._binding_exists_response(existing)
+
+        try:
+            with transaction.atomic():
+                self.perform_create(serializer)
+        except IntegrityError:
+            # A concurrent bind may win after the preflight lookup. Resolve it
+            # to the same stable API contract rather than exposing a 500.
+            existing = TrustedWorkspaceDevice.objects.filter(
+                profile=profile,
+                platform=platform,
+                device_identifier=device_identifier,
+            ).first()
+            if existing is None:
+                raise
+            return self._binding_exists_response(existing)
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def _binding_exists_response(self, binding):
+        return Response(
+            {
+                "detail": "A trusted device binding already exists for this workspace.",
+                "code": "trusted_device_binding_exists",
+                "binding": self.get_serializer(binding).data,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
     @action(detail=False, methods=["get"], url_path="current")
     def current(self, request):
         device_id = str(request.headers.get("X-Device-ID", "")).strip()
         if not device_id:
             return Response({"detail": "X-Device-ID is required."}, status=status.HTTP_400_BAD_REQUEST)
         profile = _profile_from_request(request)
-        binding = self.get_queryset().filter(device_identifier=device_id, is_active=True, is_revoked=False).first()
+        # Return an existing inactive/revoked row as well. The client needs its
+        # binding id to request reactivation instead of attempting a duplicate.
+        binding = self.get_queryset().filter(device_identifier=device_id).first()
         if binding is None:
             return Response(
                 {
@@ -1495,11 +1541,13 @@ class TrustedWorkspaceDeviceViewSet(PermissionRequiredMixin, viewsets.ModelViewS
                 },
                 status=status.HTTP_200_OK,
             )
-        binding.last_seen_at = timezone.now()
-        binding.save(update_fields=["last_seen_at", "updated_at"])
+        is_enrolled = binding.is_active and not binding.is_revoked
+        if is_enrolled:
+            binding.last_seen_at = timezone.now()
+            binding.save(update_fields=["last_seen_at", "updated_at"])
         return Response(
             {
-                "is_enrolled": True,
+                "is_enrolled": is_enrolled,
                 "device_id": device_id,
                 "profile_id": str(profile.id),
                 "platform": binding.platform,
@@ -1531,6 +1579,30 @@ class TrustedWorkspaceDeviceViewSet(PermissionRequiredMixin, viewsets.ModelViewS
                 key=f"{binding.profile_id}:{binding.id}",
             )
         )
+        return Response(self.get_serializer(binding).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="reactivate")
+    def reactivate(self, request, pk=None):
+        """Reactivate a known binding after an explicit authorized action."""
+        binding = self.get_object()
+        if not binding.is_active or binding.is_revoked:
+            binding.reactivate()
+            transaction.on_commit(
+                lambda: publish_audit_fact(
+                    event_name="identity.trusted_workspace_device.reactivated",
+                    payload={
+                        "profile_id": str(binding.profile_id),
+                        "device_id": binding.device_identifier,
+                        "binding_id": str(binding.id),
+                        "platform": binding.platform,
+                    },
+                    workspace_id=str(binding.profile_id),
+                    actor=build_actor(request=request, user=request.user),
+                    target={"type": "trusted_workspace_device", "id": str(binding.id), "label": binding.device_label or binding.device_identifier},
+                    summary=f"Trusted device {binding.device_label or binding.device_identifier} was reactivated.",
+                    key=f"{binding.profile_id}:{binding.id}",
+                )
+            )
         return Response(self.get_serializer(binding).data, status=status.HTTP_200_OK)
 
 

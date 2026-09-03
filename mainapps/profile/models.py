@@ -926,6 +926,14 @@ class TrustedWorkspaceDevice(models.Model):
         self.revoked_at = timezone.now()
         self.save(update_fields=["is_active", "is_revoked", "revoked_by", "revoked_at", "updated_at"])
 
+    def reactivate(self):
+        """Restore an existing binding without creating a duplicate row."""
+        self.is_active = True
+        self.is_revoked = False
+        self.revoked_by = None
+        self.revoked_at = None
+        self.save(update_fields=["is_active", "is_revoked", "revoked_by", "revoked_at", "updated_at"])
+
     def __str__(self):
         return f"{self.profile_id}:{self.platform}:{self.device_identifier}"
 

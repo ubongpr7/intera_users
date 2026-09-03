@@ -118,3 +118,77 @@ class TrustedWorkspaceDeviceApiTests(TestCase):
         )
         self.assertEqual(current.status_code, 200)
         self.assertFalse(current.json()["is_enrolled"])
+
+    def test_current_returns_inactive_binding_for_reactivation(self):
+        device = TrustedWorkspaceDevice.objects.create(
+            profile=self.profile,
+            device_identifier="inactive-device",
+            created_by=self.owner,
+        )
+        TrustedWorkspaceDevice.objects.filter(pk=device.pk).update(is_active=False)
+
+        response = self.client.get(
+            reverse("trusted-workspace-device-current"),
+            HTTP_X_DEVICE_ID=device.device_identifier,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["is_enrolled"])
+        self.assertEqual(payload["binding"]["id"], str(device.id))
+        self.assertEqual(payload["binding"]["status"], "inactive")
+
+    def test_duplicate_bind_returns_conflict_instead_of_server_error(self):
+        device = TrustedWorkspaceDevice.objects.create(
+            profile=self.profile,
+            device_identifier="duplicate-device",
+            created_by=self.owner,
+        )
+
+        response = self.client.post(
+            reverse("trusted-workspace-device-list"),
+            {
+                "platform": PlatformChoices.HOSPERATOR,
+                "device_identifier": device.device_identifier,
+                "device_label": "Updated label",
+                "capabilities": ["staff_call"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "trusted_device_binding_exists")
+        self.assertEqual(response.json()["binding"]["id"], str(device.id))
+
+    def test_reactivate_restores_existing_binding(self):
+        device = TrustedWorkspaceDevice.objects.create(
+            profile=self.profile,
+            device_identifier="reactivable-device",
+            created_by=self.owner,
+        )
+        TrustedWorkspaceDevice.objects.filter(pk=device.pk).update(is_active=False)
+
+        response = self.client.post(
+            reverse("trusted-workspace-device-reactivate", kwargs={"pk": device.id}),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        device.refresh_from_db()
+        self.assertTrue(device.is_active)
+        self.assertFalse(device.is_revoked)
+        self.assertEqual(response.json()["status"], "trusted")
+
+    def test_reactivate_is_idempotent_for_active_binding(self):
+        device = TrustedWorkspaceDevice.objects.create(
+            profile=self.profile,
+            device_identifier="already-active-device",
+            created_by=self.owner,
+        )
+
+        response = self.client.post(
+            reverse("trusted-workspace-device-reactivate", kwargs={"pk": device.id}),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], str(device.id))
+        self.assertEqual(TrustedWorkspaceDevice.objects.filter(profile=self.profile).count(), 1)
