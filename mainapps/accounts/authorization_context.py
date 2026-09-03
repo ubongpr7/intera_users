@@ -17,6 +17,7 @@ from mainapps.permit.models import PlatformChoices
 AUTHORIZATION_CONTEXT_HEADER = "X-Intera-Authorization-Context"
 AUTHORIZATION_CONTEXT_TOKEN_TYPE = "intera_authorization_context"
 WEBSOCKET_TICKET_TOKEN_TYPE = "intera_websocket_ticket"
+DEVICE_ENROLLMENT_PROOF_TOKEN_TYPE = "intera_device_enrollment_proof"
 
 
 def _setting(name: str, default=None):
@@ -102,6 +103,21 @@ def _system_access(user, profile, platform):
     return sorted(wildcards), wildcard_permissions
 
 
+def _hosperator_care_site_scope(user, profile):
+    """Return the care-site entitlement Core can enforce from a signed context.
+
+    Care sites are owned by Hosperator Core, not the shared Users database. A
+    tenant owner therefore receives the existing owner-wide scope, while other
+    members receive no implicit clinical scope until explicit site grants are
+    introduced.
+    """
+
+    return {
+        "version": 1,
+        "care_site_ids": ["*"] if profile is not None and profile.owner_id == user.id else [],
+    }
+
+
 def issue_authorization_context(user, *, profile=None, support_grant=None, platform=PlatformChoices.INTERA_IMS) -> str:
     now = datetime.now(timezone.utc)
     direct_permissions = set(
@@ -116,6 +132,20 @@ def issue_authorization_context(user, *, profile=None, support_grant=None, platf
     if support_grant is not None:
         direct_permissions.update(support_grant.effective_permission_codenames())
     wildcards, wildcard_permissions = _system_access(user, profile, platform) if profile is not None else ([], {})
+    # A workspace owner is the tenant's final authority. Hosperator services
+    # consume authorization contexts rather than access-token permissions, so
+    # represent that authority as a scoped, immutable wildcard in the context.
+    # Inventory retains its established owner enforcement through its services.
+    if (
+        profile is not None
+        and support_grant is None
+        and profile.owner_id == user.id
+        and platform == PlatformChoices.HOSPERATOR
+    ):
+        owner_wildcard = "system:workspace-owner"
+        if owner_wildcard not in wildcards:
+            wildcards.append(owner_wildcard)
+        wildcard_permissions[owner_wildcard] = ["hosperator.*"]
     payload = {
         "token_type": AUTHORIZATION_CONTEXT_TOKEN_TYPE,
         "jti": str(uuid4()),
@@ -141,6 +171,8 @@ def issue_authorization_context(user, *, profile=None, support_grant=None, platf
         "wildcards": wildcards,
         "wildcard_permissions": wildcard_permissions,
     }
+    if platform == PlatformChoices.HOSPERATOR:
+        payload["hosperator_care_site_scope"] = _hosperator_care_site_scope(user, profile)
     return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
 
 
@@ -164,6 +196,33 @@ def issue_websocket_ticket(context_payload: dict) -> str:
         "permissions": list(context_payload.get("permissions") or []),
         "wildcards": list(context_payload.get("wildcards") or []),
         "wildcard_permissions": context_payload.get("wildcard_permissions") or {},
+    }
+    return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
+
+
+def issue_device_enrollment_proof(binding, *, user_id=None) -> str:
+    """Issue a short-lived proof for a currently trusted workspace device.
+
+    The durable binding remains revocable in Users. The proof is only a
+    transport credential for local discovery and must be reissued periodically;
+    downstream services must verify its signature, scope, expiry, and device id.
+    """
+    now = datetime.now(timezone.utc)
+    lifetime = int(getattr(settings, "TRUSTED_DEVICE_PROOF_LIFETIME_SECONDS", 300))
+    payload = {
+        "token_type": DEVICE_ENROLLMENT_PROOF_TOKEN_TYPE,
+        "jti": str(uuid4()),
+        "iat": now,
+        "nbf": now,
+        "exp": now + timedelta(seconds=lifetime),
+        "iss": _issuer(),
+        "aud": _audience(),
+        "device_id": str(binding.device_identifier),
+        "enrollment_id": str(binding.id),
+        "profile_id": str(binding.profile_id),
+        "platform": str(binding.platform),
+        "capabilities": sorted({str(item).strip() for item in (binding.capabilities or []) if str(item).strip()}),
+        "user_id": str(user_id) if user_id is not None else None,
     }
     return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
 
@@ -202,7 +261,17 @@ def authorization_context_from_request(request) -> dict:
 
 
 def has_context_permission(payload: dict, required: str) -> bool:
-    if required in set(payload.get("permissions") or []):
+    granted_permissions = set(payload.get("permissions") or [])
+    if any(
+        granted == required
+        or (granted.endswith(".*") and required.startswith(granted[:-1]))
+        for granted in granted_permissions
+    ):
         return True
     wildcard_permissions = payload.get("wildcard_permissions") or {}
-    return any(required in set(wildcard_permissions.get(wildcard) or []) for wildcard in payload.get("wildcards") or [])
+    return any(
+        granted == required
+        or (granted.endswith(".*") and required.startswith(granted[:-1]))
+        for wildcard in payload.get("wildcards") or []
+        for granted in set(wildcard_permissions.get(wildcard) or [])
+    )

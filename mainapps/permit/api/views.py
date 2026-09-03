@@ -99,12 +99,13 @@ class RoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             profile=active_profile,
             is_active=True,
         ).values_list("user_id", flat=True)
+        platform = _platform_from_request(self.request)
         return (
             super()
             .get_queryset()
             .filter(
-                Q(profile=active_profile)
-                | Q(user_id__in=membership_user_ids)
+                Q(profile=active_profile) | Q(user_id__in=membership_user_ids),
+                role__platform=platform,
             )
             .distinct()
         )
@@ -113,7 +114,10 @@ class RoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         active_profile = _profile_from_request(self.request)
         role = serializer.validated_data["role"]
         user = serializer.validated_data["user"]
+        platform = _platform_from_request(self.request)
         _ensure_same_profile(role.profile, active_profile)
+        if role.platform != platform:
+            raise ValidationError({"role": "The role must belong to the active platform."})
         if not _user_has_profile_access(user, active_profile):
             raise PermissionDenied("The assigned user must belong to the active profile.")
         assignment = serializer.save(profile=active_profile, assigned_by=self.request.user)
@@ -278,7 +282,11 @@ class GroupAccessViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         if getattr(self, "swagger_fake_view", False):
             return self.queryset.none()
         active_profile = _profile_from_request(self.request)
-        return super().get_queryset().filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True))
+        platform = _platform_from_request(self.request)
+        return super().get_queryset().filter(
+            Q(profile=active_profile) | Q(is_system=True, profile__isnull=True),
+            platform=platform,
+        )
 
     @action(detail=True, methods=["get", "put"], url_path="permissions")
     def permissions(self, request, pk=None):
@@ -334,7 +342,11 @@ class RoleAccessViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         if getattr(self, "swagger_fake_view", False):
             return self.queryset.none()
         active_profile = _profile_from_request(self.request)
-        return super().get_queryset().filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True))
+        platform = _platform_from_request(self.request)
+        return super().get_queryset().filter(
+            Q(profile=active_profile) | Q(is_system=True, profile__isnull=True),
+            platform=platform,
+        )
 
     @action(detail=True, methods=["get", "put"], url_path="permissions")
     def permissions(self, request, pk=None):

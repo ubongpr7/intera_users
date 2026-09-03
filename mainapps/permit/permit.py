@@ -29,6 +29,26 @@ class HasModelRequestPermission(permissions.BasePermission):
             permissions.update(wildcard_permissions.get(wildcard) or [])
         return permissions
 
+    @staticmethod
+    def _matches_permission(required, granted_permissions):
+        """Support scoped wildcard grants without making broad strings implicit."""
+        return any(
+            granted == required
+            or (granted.endswith(".*") and required.startswith(granted[:-1]))
+            for granted in granted_permissions
+        )
+
+    @staticmethod
+    def _resolve_required_permission(permission, request):
+        """Map shared management APIs to the active product's access permission."""
+        if permission != "manage_company_settings":
+            return permission
+        token = getattr(request, "auth", None)
+        payload = getattr(token, "payload", {}) if token is not None else {}
+        if payload.get("platform") == "hosperator":
+            return "hosperator.staff_access.manage"
+        return permission
+
     def has_permission(self, request, view):
         permission = getattr(view, 'required_permission', None)
         if not permission:
@@ -39,6 +59,8 @@ class HasModelRequestPermission(permissions.BasePermission):
             permission = permission.get(action)
             if not permission:
                 return False
+
+        permission = self._resolve_required_permission(permission, request)
 
         if permission == "create_company":
             profile_id = getattr(request.user, "profile_id", None)
@@ -79,7 +101,7 @@ class HasModelRequestPermission(permissions.BasePermission):
         if owner_id and str(owner_id) == str(request.user.id):
             return True
 
-        return permission in user_permissions
+        return self._matches_permission(permission, user_permissions)
         
 class PermissionRequiredMixin:
     """

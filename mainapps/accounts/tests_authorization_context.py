@@ -39,3 +39,12 @@ class AuthorizationContextTests(SimpleTestCase):
         }
         self.assertTrue(has_context_permission(payload, "operate_pos"))
         self.assertFalse(has_context_permission(payload, "manage_pos_settings"))
+
+    def test_scoped_wildcard_permission_matches_platform_permission(self):
+        payload = {
+            "wildcards": ["system:workspace-owner"],
+            "wildcard_permissions": {"system:workspace-owner": ["hosperator.*"]},
+            "permissions": [],
+        }
+        self.assertTrue(has_context_permission(payload, "hosperator.patient.read"))
+        self.assertFalse(has_context_permission(payload, "read_inventory"))

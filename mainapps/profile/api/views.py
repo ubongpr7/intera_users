@@ -8,6 +8,7 @@ from mainapps.profile.views import (
     StaffGroupViewSet,
     StaffRoleAssignmentViewSet,
     StaffRoleViewSet,
+    TrustedWorkspaceDeviceViewSet,
     SupportAccessGrantViewSet,
 )
 
@@ -15,6 +16,7 @@ __all__ = [
     "CompanyProfileViewSet",
     "CompanyInvitationViewSet",
     "StaffRoleViewSet",
+    "TrustedWorkspaceDeviceViewSet",
     "StaffGroupViewSet",
     "CompanyProfileAddressViewSet",
     "StaffRoleAssignmentViewSet",

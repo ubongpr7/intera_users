@@ -10,6 +10,7 @@ from .views import (
     StaffGroupViewSet,
     StaffRoleAssignmentViewSet,
     StaffRoleViewSet,
+    TrustedWorkspaceDeviceViewSet,
 )
 
 router = DefaultRouter()
@@ -18,6 +19,7 @@ router.register(r"roles", StaffRoleViewSet, basename="staff-role")
 router.register(r"groups", StaffGroupViewSet, basename="staff-group")
 router.register(r"addresses", CompanyProfileAddressViewSet, basename="address")
 router.register(r"assignments", StaffRoleAssignmentViewSet, basename="staff-role-assignment")
+router.register(r"device-bindings", TrustedWorkspaceDeviceViewSet, basename="trusted-workspace-device")
 router.register(r"recall-policies", RecallPolicyViewSet, basename="recall-policy")
 router.register(r"reorder-strategies", ReorderStrategyViewSet, basename="reorder-strategy")
 router.register(r"inventory-policies", InventoryPolicyViewSet, basename="inventory-policy")

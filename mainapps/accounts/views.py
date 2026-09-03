@@ -28,6 +28,7 @@ from djoser.social.views import ProviderAuthView
 from django.contrib.auth import get_user_model
 from mainapps.common.settings import get_company_or_profile
 from mainapps.profile.models import CompanyProfile, SupportAccessGrant
+from mainapps.permit.models import PlatformChoices
 from subapps.kafka.producers import (
     build_actor,
     publish_support_access_workspace_entered,
@@ -90,7 +91,15 @@ def _clear_session_cookies(response):
     response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path=settings.AUTH_COOKIE_PATH)
 
 
-def _build_auth_payload(user, profile, refresh, access, *, support_grant=None):
+def _build_auth_payload(
+    user,
+    profile,
+    refresh,
+    access,
+    *,
+    support_grant=None,
+    platform=PlatformChoices.INTERA_IMS,
+):
     return {
         "refresh": str(refresh),
         "access": str(access),
@@ -98,6 +107,7 @@ def _build_auth_payload(user, profile, refresh, access, *, support_grant=None):
             user,
             profile=profile,
             support_grant=support_grant,
+            platform=platform,
         ),
         "id": user.id,
         "username": user.username,
@@ -121,6 +131,7 @@ def _build_auth_payload(user, profile, refresh, access, *, support_grant=None):
         "currency": profile.currency if profile else None,
         "email": user.email,
         "first_name": getattr(user, "first_name", ""),
+        "platform": platform,
     }
 
 
@@ -175,9 +186,11 @@ def _build_mfa_verified_response(request, user):
     auth = getattr(request, "auth", None)
     token_profile_id = None
     token_support_grant_id = None
+    token_platform = PlatformChoices.INTERA_IMS
     if auth is not None and hasattr(auth, "payload"):
         token_profile_id = auth.payload.get("profile_id")
         token_support_grant_id = auth.payload.get("support_access_grant_id")
+        token_platform = auth.payload.get("platform", PlatformChoices.INTERA_IMS)
     profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
         user,
         profile_id=token_profile_id if token_profile_id else None,
@@ -193,6 +206,7 @@ def _build_mfa_verified_response(request, user):
         profile,
         mfa_verified=True,
         support_grant=profile_access.support_grant,
+        platform=token_platform,
     )
     payload = _build_auth_payload(
         user,
@@ -200,6 +214,7 @@ def _build_mfa_verified_response(request, user):
         refresh,
         access,
         support_grant=profile_access.support_grant,
+        platform=token_platform,
     )
     payload.update({
         "detail": "MFA verified successfully.",
@@ -508,6 +523,7 @@ class CompanyContextSwitchView(APIView):
         previous_support_grant = _get_request_support_grant(request)
         serializer = CompanyContextSwitchSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        platform = serializer.validated_data["platform"]
         profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
             request.user,
             profile_id=serializer.validated_data.get("profile_id"),
@@ -532,6 +548,7 @@ class CompanyContextSwitchView(APIView):
             profile,
             mfa_verified=mfa_verified,
             support_grant=profile_access.support_grant,
+            platform=platform,
         )
         payload = _build_auth_payload(
             request.user,
@@ -539,6 +556,7 @@ class CompanyContextSwitchView(APIView):
             refresh,
             access,
             support_grant=profile_access.support_grant,
+            platform=platform,
         )
         previous_support_grant_id = str(previous_support_grant.id) if previous_support_grant else None
         current_support_grant_id = (

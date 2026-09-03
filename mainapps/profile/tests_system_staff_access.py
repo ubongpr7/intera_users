@@ -18,10 +18,18 @@ class SystemStaffAccessTests(TestCase):
         sync_system_staff_roles()
         sync_system_staff_groups()
 
-        self.assertEqual(StaffRole.objects.filter(name="Cashier").count(), 1)
-        self.assertEqual(StaffGroup.objects.filter(name="Cashier").count(), 1)
-        self.assertIsNone(StaffRole.objects.get(name="Cashier").profile_id)
-        self.assertTrue(StaffGroup.objects.get(name="Cashier").is_system)
+        self.assertEqual(StaffRole.objects.filter(name="IMS Cashier").count(), 1)
+        self.assertEqual(StaffGroup.objects.filter(name="IMS Cashier").count(), 1)
+        self.assertIsNone(StaffRole.objects.get(name="IMS Cashier").profile_id)
+        self.assertTrue(StaffGroup.objects.get(name="IMS Cashier").is_system)
+
+    def test_sync_creates_hosperator_presets_without_inventory_presets(self):
+        sync_system_staff_roles(platform="hosperator")
+        sync_system_staff_groups(platform="hosperator")
+
+        self.assertEqual(StaffRole.objects.filter(platform="hosperator").count(), 7)
+        self.assertEqual(StaffGroup.objects.filter(platform="hosperator").count(), 7)
+        self.assertEqual(StaffRole.objects.filter(platform="intera_ims").count(), 0)
 
     def test_system_definitions_cannot_be_edited_or_receive_changed_permissions(self):
         role = StaffRole.objects.create(name="Universal", is_system=True, profile=None)

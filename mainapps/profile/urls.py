@@ -9,6 +9,7 @@ from .views import (
     ReorderStrategyViewSet,
     StaffRoleAssignmentViewSet,
     StaffRoleViewSet,
+    TrustedWorkspaceDeviceViewSet,
     StaffGroupViewSet,
     CompanyProfileAddressViewSet,
     SupportAccessGrantViewSet,
@@ -24,6 +25,7 @@ router.register(r'roles', StaffRoleViewSet, basename='staff-role')
 router.register(r'groups', StaffGroupViewSet, basename='staff-group')
 router.register(r'addresses',     CompanyProfileAddressViewSet, basename='address')
 router.register(r'assignments', StaffRoleAssignmentViewSet, basename='staff-role-assignment')
+router.register(r'device-bindings', TrustedWorkspaceDeviceViewSet, basename='trusted-workspace-device')
 router.register(r'invitations', CompanyInvitationViewSet, basename='company-invitation')
 router.register(r'support-access-grants', SupportAccessGrantViewSet, basename='support-access-grant')
 

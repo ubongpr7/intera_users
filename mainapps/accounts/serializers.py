@@ -695,6 +695,11 @@ class CompanyContextSwitchSerializer(serializers.Serializer):
     profile_id = serializers.IntegerField(required=False)
     company_code = serializers.CharField(required=False, allow_blank=True)
     support_access_grant_id = serializers.UUIDField(required=False)
+    platform = serializers.ChoiceField(
+        choices=PlatformChoices.choices,
+        required=False,
+        default=PlatformChoices.INTERA_IMS,
+    )
 
     def validate(self, attrs):
         profile_id = attrs.get("profile_id")

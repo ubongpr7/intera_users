@@ -4,7 +4,7 @@ from django.utils import timezone
 from cities_light.models import City, Country, Region, SubRegion
 
 from mainapps.accounts.api.serializers import MyUserSerializer
-from mainapps.permit.models import CustomUserPermission
+from mainapps.permit.models import CustomUserPermission, PlatformChoices
 from mainapps.profile.support_access import user_has_direct_profile_access
 from .support_access_presets import (
     DISALLOWED_SUPPORT_CUSTOM_PERMISSION_CODENAMES,
@@ -15,7 +15,8 @@ from .models import (
     CompanyInvitation,
     CompanyMembership,
     CompanyProfile, CompanyProfileAddress, StaffGroup, StaffRole, StaffRoleAssignment,
-     RecallPolicy, ReorderStrategy, InventoryPolicy, SupportAccessGrant
+     RecallPolicy, ReorderStrategy, InventoryPolicy, SupportAccessGrant,
+    TrustedWorkspaceDevice,
 )
 
 User = get_user_model()
@@ -193,6 +194,82 @@ class CompanyMembershipStaffSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+
+class TrustedWorkspaceDeviceSerializer(serializers.ModelSerializer):
+    """Explicit contract for durable workspace device trust and local proof."""
+
+    status = serializers.SerializerMethodField()
+    signed_enrollment_proof = serializers.SerializerMethodField()
+    capabilities = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+    )
+    platform = serializers.ChoiceField(
+        choices=PlatformChoices.choices,
+        default=PlatformChoices.HOSPERATOR,
+    )
+
+    class Meta:
+        model = TrustedWorkspaceDevice
+        fields = [
+            "id",
+            "profile",
+            "platform",
+            "device_identifier",
+            "device_label",
+            "capabilities",
+            "is_active",
+            "is_revoked",
+            "status",
+            "created_by",
+            "revoked_by",
+            "revoked_at",
+            "last_seen_at",
+            "created_at",
+            "updated_at",
+            "signed_enrollment_proof",
+        ]
+        read_only_fields = [
+            "id",
+            "profile",
+            "is_active",
+            "is_revoked",
+            "status",
+            "created_by",
+            "revoked_by",
+            "revoked_at",
+            "last_seen_at",
+            "created_at",
+            "updated_at",
+            "signed_enrollment_proof",
+        ]
+
+    def validate_device_identifier(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("A device identifier is required.")
+        if any(ord(character) < 32 for character in value):
+            raise serializers.ValidationError("Device identifier contains an invalid control character.")
+        return value
+
+    def validate_capabilities(self, value):
+        normalized = sorted({item.strip() for item in value if item.strip()})
+        if len(normalized) > 16:
+            raise serializers.ValidationError("A device may have at most 16 capabilities.")
+        return normalized
+
+    def get_status(self, obj):
+        return obj.status
+
+    def get_signed_enrollment_proof(self, obj):
+        request = self.context.get("request")
+        current_device_id = str(request.headers.get("X-Device-ID", "")).strip() if request else ""
+        if not obj.is_active or obj.is_revoked or current_device_id != obj.device_identifier:
+            return None
+        from mainapps.accounts.authorization_context import issue_device_enrollment_proof
+
+        return issue_device_enrollment_proof(obj, user_id=getattr(request.user, "id", None))
 
 class AddStaffSerializer(serializers.Serializer):
     """Serializer for adding staff to profile"""

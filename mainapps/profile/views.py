@@ -34,6 +34,7 @@ from subapps.kafka.producers import (
     publish_support_access_grant_extended,
     publish_support_access_grant_revoked,
 )
+from subapps.kafka.producers.platform_events import publish_audit_fact
 from subapps.kafka.producers.access_control import (
     _group_names,
     _permission_codes,
@@ -61,6 +62,7 @@ from .models import (
     StaffGroup,
     StaffRole,
     StaffRoleAssignment,
+    TrustedWorkspaceDevice,
 )
 from .default_staff_presets import populate_default_staff_access
 from .support_access import expire_support_grants, user_has_direct_profile_access
@@ -83,6 +85,7 @@ from .serializers import (
     StaffRoleAssignmentSerializer,
     StaffRoleListSerializer,
     StaffRoleSerializer,
+    TrustedWorkspaceDeviceSerializer,
     SupportAccessGrantCreateSerializer,
     SupportAccessGrantExtendSerializer,
     SupportAccessGrantRespondSerializer,
@@ -111,6 +114,14 @@ def _profile_from_request(request):
     if not profile:
         raise PermissionDenied("Profile context is not accessible for this user.")
     return profile
+
+
+def _platform_from_request(request, *, data=None):
+    value = data.get("platform") if data is not None else request.query_params.get("platform")
+    platform = value or PlatformChoices.INTERA_IMS
+    if platform not in PlatformChoices.values:
+        raise ValidationError({"platform": "Unknown platform."})
+    return platform
 
 
 def _staff_usage(profile, *, include_pending=True):
@@ -304,8 +315,13 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def add_staff(self, request, pk=None):
         profile = self.get_object()
+        platform = _platform_from_request(request)
         serializer = AddStaffSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        role = StaffRole.objects.filter(pk=serializer.validated_data["role_id"]).first()
+        if role is None or role.platform != platform:
+            raise ValidationError({"role_id": "The role must belong to the active platform."})
 
         assignment = StaffRoleAssignment.objects.create(
             user_id=serializer.validated_data["user_id"],
@@ -433,19 +449,22 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def roles(self, request, pk=None):
         profile = self.get_object()
-        serializer = StaffRoleSerializer(profile.get_staff_roles(), many=True)
+        platform = _platform_from_request(request)
+        serializer = StaffRoleSerializer(profile.get_staff_roles().filter(platform=platform), many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=["get"])
     def groups(self, request, pk=None):
         profile = self.get_object()
-        serializer = StaffGroupSerializer(profile.get_staff_groups(), many=True)
+        platform = _platform_from_request(request)
+        serializer = StaffGroupSerializer(profile.get_staff_groups().filter(platform=platform), many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=["post"], url_path="populate-default-access")
     def populate_default_access(self, request, pk=None):
         profile = self.get_object()
-        payload = populate_default_staff_access(profile)
+        platform = _platform_from_request(request)
+        payload = populate_default_staff_access(profile, platform=platform)
         return Response(payload, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
@@ -1375,6 +1394,127 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         return Response(SupportAccessGrantSerializer(grant, context=self.get_serializer_context()).data)
 
 
+class TrustedWorkspaceDeviceViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
+    """Manage revocable workspace device trust without touching POS terminals."""
+
+    queryset = TrustedWorkspaceDevice.objects.select_related("profile", "created_by", "revoked_by")
+    serializer_class = TrustedWorkspaceDeviceSerializer
+    permission_classes = [IsAuthenticated, HasModelRequestPermission]
+    pagination_class = OptionalPageNumberPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ["platform", "is_active", "is_revoked"]
+    search_fields = ["device_identifier", "device_label"]
+    ordering_fields = ["device_identifier", "device_label", "created_at", "last_seen_at"]
+    ordering = ["device_label", "device_identifier"]
+    http_method_names = ["get", "post", "head", "options"]
+    required_permission = {
+        "list": "hosperator.device_binding.manage",
+        "retrieve": "hosperator.device_binding.manage",
+        "create": "hosperator.device_binding.manage",
+        "revoke": "hosperator.device_binding.manage",
+    }
+
+    def get_permissions(self):
+        # A staff member may read only the binding for the current device. The
+        # ability to bind or revoke devices remains separately permissioned.
+        if getattr(self, "action", None) == "current":
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
+    def _platform(self):
+        value = self.request.query_params.get("platform") or PlatformChoices.HOSPERATOR
+        if value not in PlatformChoices.values:
+            raise ValidationError({"platform": "Unknown platform."})
+        return value
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if getattr(self, "swagger_fake_view", False):
+            return queryset.none()
+        profile = _profile_from_request(self.request)
+        return queryset.filter(profile=profile, platform=self._platform())
+
+    def perform_create(self, serializer):
+        profile = _profile_from_request(self.request)
+        device = serializer.save(
+            profile=profile,
+            created_by=self.request.user,
+        )
+        transaction.on_commit(
+            lambda: publish_audit_fact(
+                event_name="identity.trusted_workspace_device.created",
+                payload={
+                    "profile_id": str(profile.id),
+                    "device_id": device.device_identifier,
+                    "binding_id": str(device.id),
+                    "platform": device.platform,
+                    "capabilities": device.capabilities,
+                },
+                workspace_id=str(profile.id),
+                actor=build_actor(request=self.request, user=self.request.user),
+                target={"type": "trusted_workspace_device", "id": str(device.id), "label": device.device_label or device.device_identifier},
+                summary=f"Trusted device {device.device_label or device.device_identifier} was bound.",
+                key=f"{profile.id}:{device.id}",
+            )
+        )
+
+    @action(detail=False, methods=["get"], url_path="current")
+    def current(self, request):
+        device_id = str(request.headers.get("X-Device-ID", "")).strip()
+        if not device_id:
+            return Response({"detail": "X-Device-ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+        profile = _profile_from_request(request)
+        binding = self.get_queryset().filter(device_identifier=device_id, is_active=True, is_revoked=False).first()
+        if binding is None:
+            return Response(
+                {
+                    "is_enrolled": False,
+                    "device_id": device_id,
+                    "profile_id": str(profile.id),
+                    "platform": self._platform(),
+                    "binding": None,
+                },
+                status=status.HTTP_200_OK,
+            )
+        binding.last_seen_at = timezone.now()
+        binding.save(update_fields=["last_seen_at", "updated_at"])
+        return Response(
+            {
+                "is_enrolled": True,
+                "device_id": device_id,
+                "profile_id": str(profile.id),
+                "platform": binding.platform,
+                "binding": self.get_serializer(binding).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="revoke")
+    def revoke(self, request, pk=None):
+        binding = self.get_object()
+        if binding.is_revoked:
+            return Response(self.get_serializer(binding).data, status=status.HTTP_200_OK)
+        binding.revoke(revoked_by=request.user)
+        transaction.on_commit(
+            lambda: publish_audit_fact(
+                event_name="identity.trusted_workspace_device.revoked",
+                payload={
+                    "profile_id": str(binding.profile_id),
+                    "device_id": binding.device_identifier,
+                    "binding_id": str(binding.id),
+                    "platform": binding.platform,
+                },
+                workspace_id=str(binding.profile_id),
+                actor=build_actor(request=request, user=request.user),
+                target={"type": "trusted_workspace_device", "id": str(binding.id), "label": binding.device_label or binding.device_identifier},
+                summary=f"Trusted device {binding.device_label or binding.device_identifier} was revoked.",
+                severity="warning",
+                key=f"{binding.profile_id}:{binding.id}",
+            )
+        )
+        return Response(self.get_serializer(binding).data, status=status.HTTP_200_OK)
+
+
 class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = StaffRole.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
@@ -1406,19 +1546,29 @@ class StaffRoleViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
-        return queryset.filter(Q(profile=profile) | Q(is_system=True, profile__isnull=True))
+        platform = _platform_from_request(self.request)
+        return queryset.filter(
+            Q(profile=profile) | Q(is_system=True, profile__isnull=True),
+            platform=platform,
+        )
 
     def perform_create(self, serializer):
         profile = _profile_from_request(self.request)
         if not profile:
             raise PermissionDenied("No company profile is linked to this account.")
+        platform = _platform_from_request(self.request, data=serializer.validated_data)
         if StaffRole.objects.filter(
-            platform=serializer.validated_data.get("platform", PlatformChoices.INTERA_IMS),
+            platform=platform,
             name__iexact=serializer.validated_data["name"],
             is_system=True,
         ).exists():
-            raise ValidationError("That name is reserved for an Intera system role.")
-        role = serializer.save(profile=profile, created_by=self.request.user, is_system=False)
+            raise ValidationError("That name is reserved for a system role on this platform.")
+        role = serializer.save(
+            profile=profile,
+            platform=platform,
+            created_by=self.request.user,
+            is_system=False,
+        )
         transaction.on_commit(
             lambda: publish_role_changed(
                 actor=build_actor(request=self.request, user=self.request.user),
@@ -1536,7 +1686,8 @@ class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet)
             return queryset.none()
         profile = _profile_from_request(self.request)
         if profile:
-            return queryset.filter(profile=profile)
+            platform = _platform_from_request(self.request)
+            return queryset.filter(profile=profile, role__platform=platform)
         return queryset.none()
 
     def perform_create(self, serializer):
@@ -1549,6 +1700,9 @@ class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet)
             raise PermissionDenied("Cross-profile assignment is not allowed.")
 
         role = serializer.validated_data["role"]
+        platform = _platform_from_request(self.request)
+        if role.platform != platform:
+            raise ValidationError({"role": "The role must belong to the active platform."})
         if role.profile_id not in (None, profile.id) or (role.is_system and role.profile_id is not None):
             raise PermissionDenied("Cross-profile role assignment is not allowed.")
         assignment = serializer.save(profile=profile, assigned_by=self.request.user)
@@ -1562,6 +1716,11 @@ class StaffRoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet)
         )
 
     def perform_update(self, serializer):
+        platform = _platform_from_request(self.request)
+        assignment = self.get_object()
+        requested_role = serializer.validated_data.get("role", assignment.role)
+        if requested_role.platform != platform:
+            raise ValidationError({"role": "The role must belong to the active platform."})
         assignment = serializer.save()
         transaction.on_commit(
             lambda: publish_role_assignment_changed(
@@ -1634,19 +1793,29 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         profile = _profile_from_request(self.request)
         if not profile:
             return queryset.none()
-        return queryset.filter(Q(profile=profile) | Q(is_system=True, profile__isnull=True))
+        platform = _platform_from_request(self.request)
+        return queryset.filter(
+            Q(profile=profile) | Q(is_system=True, profile__isnull=True),
+            platform=platform,
+        )
 
     def perform_create(self, serializer):
         profile = _profile_from_request(self.request)
         if not profile:
             raise PermissionDenied("No company profile is linked to this account.")
+        platform = _platform_from_request(self.request, data=serializer.validated_data)
         if StaffGroup.objects.filter(
-            platform=serializer.validated_data.get("platform", PlatformChoices.INTERA_IMS),
+            platform=platform,
             name__iexact=serializer.validated_data["name"],
             is_system=True,
         ).exists():
-            raise ValidationError("That name is reserved for an Intera system group.")
-        group = serializer.save(profile=profile, created_by=self.request.user, is_system=False)
+            raise ValidationError("That name is reserved for a system group on this platform.")
+        group = serializer.save(
+            profile=profile,
+            platform=platform,
+            created_by=self.request.user,
+            is_system=False,
+        )
         transaction.on_commit(
             lambda: publish_group_changed(
                 actor=build_actor(request=self.request, user=self.request.user),
@@ -1737,9 +1906,19 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 {"error": "User does not belong to this profile"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        before_groups = _group_names(user.staff_groups.filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True)))
+        before_groups = _group_names(
+            user.staff_groups.filter(
+                Q(profile=active_profile) | Q(is_system=True, profile__isnull=True),
+                platform=group.platform,
+            )
+        )
         group.users.add(user)
-        after_groups = _group_names(user.staff_groups.filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True)))
+        after_groups = _group_names(
+            user.staff_groups.filter(
+                Q(profile=active_profile) | Q(is_system=True, profile__isnull=True),
+                platform=group.platform,
+            )
+        )
         transaction.on_commit(
             lambda: publish_user_groups_updated(
                 profile=active_profile,
@@ -1779,9 +1958,19 @@ class StaffGroupViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 {"error": "User does not belong to this profile"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        before_groups = _group_names(user.staff_groups.filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True)))
+        before_groups = _group_names(
+            user.staff_groups.filter(
+                Q(profile=active_profile) | Q(is_system=True, profile__isnull=True),
+                platform=group.platform,
+            )
+        )
         group.users.remove(user)
-        after_groups = _group_names(user.staff_groups.filter(Q(profile=active_profile) | Q(is_system=True, profile__isnull=True)))
+        after_groups = _group_names(
+            user.staff_groups.filter(
+                Q(profile=active_profile) | Q(is_system=True, profile__isnull=True),
+                platform=group.platform,
+            )
+        )
         transaction.on_commit(
             lambda: publish_user_groups_updated(
                 profile=active_profile,

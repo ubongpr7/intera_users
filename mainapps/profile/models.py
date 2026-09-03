@@ -836,6 +836,100 @@ class CompanyMembership(models.Model):
         return f"{self.user_id}:{self.profile_id}:{self.role}"
 
 
+class TrustedWorkspaceDevice(models.Model):
+    """A revocable device trust record for a workspace and product platform.
+
+    This is deliberately separate from POS terminal binding. A physical device
+    may be trusted by several workspaces and may still have an independent POS
+    terminal assignment in each workspace.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    profile = models.ForeignKey(
+        CompanyProfile,
+        on_delete=models.CASCADE,
+        related_name="trusted_devices",
+    )
+    platform = models.CharField(
+        max_length=32,
+        choices=PlatformChoices.choices,
+        default=PlatformChoices.HOSPERATOR,
+        db_index=True,
+    )
+    device_identifier = models.CharField(max_length=255, db_index=True)
+    device_label = models.CharField(max_length=255, blank=True)
+    capabilities = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Capabilities granted to this trusted device, such as staff_call.",
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    is_revoked = models.BooleanField(default=False, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="trusted_workspace_devices_created",
+        null=True,
+        blank=True,
+    )
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="trusted_workspace_devices_revoked",
+        null=True,
+        blank=True,
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["profile", "platform", "device_identifier"],
+                name="unique_trusted_device_per_workspace_platform",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["profile", "platform", "is_active"]),
+        ]
+
+    def clean(self):
+        self.device_identifier = (self.device_identifier or "").strip()
+        if not self.device_identifier:
+            raise ValidationError({"device_identifier": "A device identifier is required."})
+        if any(ord(character) < 32 for character in self.device_identifier):
+            raise ValidationError({"device_identifier": "Device identifier contains an invalid control character."})
+        if self.is_revoked and self.is_active:
+            raise ValidationError({"is_active": "A revoked device cannot remain active."})
+        if not isinstance(self.capabilities, list):
+            raise ValidationError({"capabilities": "Capabilities must be a list."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    @property
+    def status(self):
+        if self.is_revoked:
+            return "revoked"
+        if not self.is_active:
+            return "inactive"
+        return "trusted"
+
+    def revoke(self, *, revoked_by=None):
+        self.is_active = False
+        self.is_revoked = True
+        self.revoked_by = revoked_by
+        self.revoked_at = timezone.now()
+        self.save(update_fields=["is_active", "is_revoked", "revoked_by", "revoked_at", "updated_at"])
+
+    def __str__(self):
+        return f"{self.profile_id}:{self.platform}:{self.device_identifier}"
+
+
 def generate_support_access_invitation_code():
     return secrets.token_urlsafe(24)[:32]
 
