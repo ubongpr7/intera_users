@@ -254,6 +254,7 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         "partial_update": "update_company",
         "destroy": "delete_company",
         "staff_active_assignments": "manage_company_settings",
+        "staff_call_directory": "read_company",
         "add_staff": "manage_company_settings",
         "remove_staff": "manage_company_settings",
         "roles": "manage_company_settings",
@@ -274,6 +275,13 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         if self.action == "list":
             return CompanyProfileListSerializer
         return CompanyProfileDetailSerializer
+
+    def get_permissions(self):
+        # Every active hospital staff member may call; this directory projection
+        # is intentionally separate from administrative staff management.
+        if self.action == "staff_call_directory":
+            return [IsAuthenticated()]
+        return super().get_permissions()
 
     def perform_create(self, serializer):
         profile = serializer.save(owner=self.request.user)
@@ -311,6 +319,17 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         )
         serializer = CompanyMembershipStaffSerializer(staff_memberships, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["get"], url_path="staff-call-directory")
+    def staff_call_directory(self, request, pk=None):
+        """Return the minimum active-membership projection used for staff calling."""
+        profile = self.get_object()
+        staff_memberships = (
+            CompanyMembership.objects.filter(profile=profile, is_active=True)
+            .select_related("user")
+            .order_by("user__first_name", "user__last_name", "user_id")
+        )
+        return Response(CompanyMembershipStaffSerializer(staff_memberships, many=True).data)
 
     @action(detail=True, methods=["post"])
     def add_staff(self, request, pk=None):
