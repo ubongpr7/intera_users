@@ -104,6 +104,8 @@ def allowed_frontend_origins():
     origins = [
         *list(configured or []),
         getattr(settings, "FRONTEND_SITE_URL", ""),
+        getattr(settings, "INTERA_IMS_FRONTEND_SITE_URL", ""),
+        getattr(settings, "HOSPERATOR_FRONTEND_SITE_URL", ""),
         getattr(settings, "SITE_URL", ""),
     ]
     return {origin for origin in (normalize_frontend_origin(item) for item in origins) if origin}

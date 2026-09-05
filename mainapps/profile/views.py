@@ -3,7 +3,7 @@ import os
 import secrets
 from datetime import timedelta
 from io import StringIO
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -117,12 +117,75 @@ def _profile_from_request(request):
     return profile
 
 
+def _normalize_platform(value):
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in {"inventory", "interaims", "intera"}:
+        return PlatformChoices.INTERA_IMS
+    if normalized in {"hospital", "hosperator"}:
+        return PlatformChoices.HOSPERATOR
+    if normalized in PlatformChoices.values:
+        return normalized
+    return None
+
+
 def _platform_from_request(request, *, data=None):
-    value = data.get("platform") if data is not None else request.query_params.get("platform")
-    platform = value or PlatformChoices.INTERA_IMS
-    if platform not in PlatformChoices.values:
+    value = None
+    if data is not None:
+        value = data.get("platform") or data.get("application") or data.get("product_context")
+    if not value:
+        value = (
+            request.query_params.get("platform")
+            or request.query_params.get("application")
+            or request.headers.get("X-Intera-Product-Context")
+            or request.headers.get("X-Intera-Product")
+            or request.headers.get("X-Intera-Application")
+        )
+
+    platform = _normalize_platform(value)
+    if value and platform is None:
         raise ValidationError({"platform": "Unknown platform."})
-    return platform
+    return platform or PlatformChoices.INTERA_IMS
+
+
+def _platform_from_origin(request):
+    for header_name in ("X-Intera-Frontend-Origin", "X-Frontend-Origin", "Origin", "Referer"):
+        host = urlsplit(request.headers.get(header_name, "")).hostname or ""
+        normalized_host = host.lower()
+        if "hosperator" in normalized_host:
+            return PlatformChoices.HOSPERATOR
+        if "interaims" in normalized_host:
+            return PlatformChoices.INTERA_IMS
+    return None
+
+
+def _frontend_platform_for_request(request, *, data=None):
+    return _platform_from_origin(request) or _platform_from_request(request, data=data)
+
+
+def _format_action_url_template(template, invitation_code):
+    try:
+        return template.format(code=invitation_code, token=invitation_code)
+    except (IndexError, KeyError, ValueError):
+        return template
+
+
+def _build_platform_action_url(request, path, *, invitation_code, platform, template_setting):
+    suffix = "HOSPERATOR" if platform == PlatformChoices.HOSPERATOR else "INTERA_IMS"
+    product_template = getattr(settings, f"{template_setting}_{suffix}", "").strip()
+    if product_template:
+        return _format_action_url_template(product_template, invitation_code)
+
+    if platform == PlatformChoices.INTERA_IMS:
+        shared_template = getattr(settings, template_setting, "").strip()
+        if shared_template:
+            return _format_action_url_template(shared_template, invitation_code)
+
+    default_origin = (
+        getattr(settings, "HOSPERATOR_FRONTEND_SITE_URL", "")
+        if platform == PlatformChoices.HOSPERATOR
+        else getattr(settings, "INTERA_IMS_FRONTEND_SITE_URL", "")
+    )
+    return build_frontend_url(request, path, default=default_origin)
 
 
 def _require_subscription_service_key(request):
@@ -587,16 +650,14 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     @staticmethod
     def _build_invitation_accept_url(request, invitation):
-        template = getattr(settings, "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
-        if not template:
-            return build_frontend_url(
-                request,
-                f"/accounts/invitations/{quote(invitation.invitation_code, safe='')}",
-            )
-        try:
-            return template.format(code=invitation.invitation_code, token=invitation.invitation_code)
-        except (IndexError, KeyError, ValueError):
-            return template
+        invitation_code = quote(invitation.invitation_code, safe="")
+        return _build_platform_action_url(
+            request,
+            f"/accounts/invitations/{invitation_code}",
+            invitation_code=invitation.invitation_code,
+            platform=_frontend_platform_for_request(request, data=getattr(request, "data", None)),
+            template_setting="COMPANY_INVITATION_ACCEPT_URL_TEMPLATE",
+        )
 
     def _send_invitation_email(self, request, invitation):
         inviter_email = invitation.invited_by.email if invitation.invited_by_id else "an administrator"
@@ -1167,16 +1228,14 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
 
     @staticmethod
     def _build_support_access_accept_url(request, grant):
-        template = getattr(settings, "SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE", "").strip()
-        if not template:
-            return build_frontend_url(
-                request,
-                f"/accounts/support-access/{quote(grant.invitation_code, safe='')}",
-            )
-        try:
-            return template.format(code=grant.invitation_code, token=grant.invitation_code)
-        except (IndexError, KeyError, ValueError):
-            return template
+        invitation_code = quote(grant.invitation_code, safe="")
+        return _build_platform_action_url(
+            request,
+            f"/accounts/support-access/{invitation_code}",
+            invitation_code=grant.invitation_code,
+            platform=_frontend_platform_for_request(request, data=getattr(request, "data", None)),
+            template_setting="SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE",
+        )
 
     def _send_support_access_request_email(self, request, grant):
         requester_email = grant.created_by.email if grant.created_by_id else "a workspace administrator"

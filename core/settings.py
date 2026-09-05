@@ -240,8 +240,15 @@ EMAIL_SHARED_STATIC_LOCATION = os.getenv(
 COMPANY_INVITATION_EXPIRY_DAYS = int(os.getenv("COMPANY_INVITATION_EXPIRY_DAYS", "2"))
 SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
 FRONTEND_SITE_URL = os.getenv("FRONTEND_SITE_URL", SITE_URL).strip().rstrip("/")
+INTERA_IMS_FRONTEND_SITE_URL = os.getenv("INTERA_IMS_FRONTEND_SITE_URL", FRONTEND_SITE_URL).strip().rstrip("/")
+HOSPERATOR_FRONTEND_SITE_URL = os.getenv(
+    "HOSPERATOR_FRONTEND_SITE_URL",
+    FRONTEND_SITE_URL,
+).strip().rstrip("/")
 _default_frontend_action_allowed_origins = [
     FRONTEND_SITE_URL,
+    INTERA_IMS_FRONTEND_SITE_URL,
+    HOSPERATOR_FRONTEND_SITE_URL,
     SITE_URL,
     "http://localhost:3000",
     "http://localhost:3005",
@@ -253,15 +260,28 @@ _default_frontend_action_allowed_origins = [
     "https://hosperator.com",
     "https://www.hosperator.com",
     "https://dev.hosperator.com",
-    "https://ospirator.com",
-    "https://www.ospirator.com",
-    "https://dev.ospirator.com",
 ]
 FRONTEND_ACTION_ALLOWED_ORIGINS = _split_csv_env(
     "FRONTEND_ACTION_ALLOWED_ORIGINS",
     [origin for origin in _default_frontend_action_allowed_origins if origin],
 )
 COMPANY_INVITATION_ACCEPT_URL_TEMPLATE = os.getenv("COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
+COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_INTERA_IMS = os.getenv(
+    "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_INTERA_IMS",
+    COMPANY_INVITATION_ACCEPT_URL_TEMPLATE,
+).strip()
+COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR = os.getenv(
+    "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR",
+    "",
+).strip()
+SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_INTERA_IMS = os.getenv(
+    "SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_INTERA_IMS",
+    os.getenv("SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE", ""),
+).strip()
+SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_HOSPERATOR = os.getenv(
+    "SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_HOSPERATOR",
+    "",
+).strip()
 _frontend_site = urlparse(FRONTEND_SITE_URL) if FRONTEND_SITE_URL else None
 EMAIL_FRONTEND_PROTOCOL = (_frontend_site.scheme if _frontend_site and _frontend_site.scheme else "").strip() or None
 EMAIL_FRONTEND_DOMAIN = (_frontend_site.netloc if _frontend_site and _frontend_site.netloc else "").strip() or None
@@ -416,6 +436,9 @@ CORS_ALLOW_HEADERS = [
     'X-profile-id',  
     'x-intera-authorization-context',
     'x-intera-frontend-origin',
+    'x-intera-product',
+    'x-intera-product-context',
+    'x-intera-application',
     'x-frontend-origin',
     'x-device-id',
 ]
@@ -441,9 +464,6 @@ _default_cors_allowed_origins = [
     'https://hosperator.com',
     'https://www.hosperator.com',
     'https://dev.hosperator.com',
-    'https://ospirator.com',
-    'https://www.ospirator.com',
-    'https://dev.ospirator.com',
     'http://10.0.2.2:3000',
     'http://10.0.2.2:8080',
 

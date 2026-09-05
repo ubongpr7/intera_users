@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import UntypedToken
 
 from mainapps.accounts.models import User
-from mainapps.permit.models import CustomUserPermission, PermissionCategory
+from mainapps.permit.models import CustomUserPermission, PermissionCategory, PlatformChoices
 from mainapps.permit.models import CombinedPermissions
 from mainapps.profile.models import CompanyInvitation, CompanyMembership, CompanyProfileAddress, LLMModel, LLMProviderChoices, ModelVersion, ProfileAgent
 from mainapps.profile.models import CompanyProfile, StaffGroup, StaffRole, StaffRoleAssignment, SupportAccessGrant
@@ -196,7 +196,13 @@ class CompanyInvitationActionTests(TestCase):
         self.auth_token = SimpleNamespace(payload={"profile_id": self.profile.id})
         self.client.force_authenticate(user=self.user, token=self.auth_token)
 
-    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test", COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="")
+    @override_settings(
+        FRONTEND_SITE_URL="https://app.interaims.test",
+        INTERA_IMS_FRONTEND_SITE_URL="https://app.interaims.test",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_INTERA_IMS="",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR="",
+    )
     @patch("mainapps.profile.views.send_html_email")
     @patch("mainapps.profile.views.publish_invitation_changed")
     def test_invite_sends_company_invitation_email(self, publish_invitation_changed_mock, send_html_email_mock):
@@ -224,7 +230,73 @@ class CompanyInvitationActionTests(TestCase):
             f"https://app.interaims.test/accounts/invitations/{invitation.invitation_code}",
         )
 
-    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test", COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="")
+    @override_settings(
+        FRONTEND_SITE_URL="https://dev.interaims.com",
+        INTERA_IMS_FRONTEND_SITE_URL="https://dev.interaims.com",
+        HOSPERATOR_FRONTEND_SITE_URL="https://dev.hosperator.com",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="https://dev.interaims.com/accounts/invitations/{token}",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR="",
+    )
+    @patch("mainapps.profile.views.send_html_email")
+    @patch("mainapps.profile.views.publish_invitation_changed")
+    def test_hosperator_invite_uses_hosperator_frontend_when_intera_template_exists(
+        self,
+        publish_invitation_changed_mock,
+        send_html_email_mock,
+    ):
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/management/invitations/invite/",
+                {"email": "hosperator-invitee@example.com", "role": "member", "platform": PlatformChoices.HOSPERATOR},
+                format="json",
+                HTTP_X_INTERA_PRODUCT_CONTEXT="hosperator",
+            )
+
+        self.assertEqual(response.status_code, HTTPStatus.CREATED)
+        invitation = CompanyInvitation.objects.get(email="hosperator-invitee@example.com")
+        self.assertEqual(
+            send_html_email_mock.call_args.kwargs["context"]["accept_url"],
+            f"https://dev.hosperator.com/accounts/invitations/{invitation.invitation_code}",
+        )
+        publish_invitation_changed_mock.assert_called_once()
+
+    @override_settings(
+        FRONTEND_SITE_URL="https://dev.interaims.com",
+        HOSPERATOR_FRONTEND_SITE_URL="https://dev.hosperator.com",
+        FRONTEND_ACTION_ALLOWED_ORIGINS=["https://dev.interaims.com", "https://dev.hosperator.com"],
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="https://dev.interaims.com/accounts/invitations/{token}",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR="",
+    )
+    @patch("mainapps.profile.views.send_html_email")
+    @patch("mainapps.profile.views.publish_invitation_changed")
+    def test_hosperator_invite_uses_hosperator_origin_when_present(
+        self,
+        publish_invitation_changed_mock,
+        send_html_email_mock,
+    ):
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/management/invitations/invite/",
+                {"email": "origin-invitee@example.com", "role": "member"},
+                format="json",
+                HTTP_ORIGIN="https://dev.hosperator.com",
+            )
+
+        self.assertEqual(response.status_code, HTTPStatus.CREATED)
+        invitation = CompanyInvitation.objects.get(email="origin-invitee@example.com")
+        self.assertEqual(
+            send_html_email_mock.call_args.kwargs["context"]["accept_url"],
+            f"https://dev.hosperator.com/accounts/invitations/{invitation.invitation_code}",
+        )
+        publish_invitation_changed_mock.assert_called_once()
+
+    @override_settings(
+        FRONTEND_SITE_URL="https://app.interaims.test",
+        INTERA_IMS_FRONTEND_SITE_URL="https://app.interaims.test",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_INTERA_IMS="",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR="",
+    )
     def test_invite_notifies_registered_user(self):
         invitee = User.objects.create_user(
             email="invitee@example.com",
@@ -319,7 +391,13 @@ class CompanyInvitationActionTests(TestCase):
         send_html_email_mock.assert_called_once()
         publish_invitation_changed_mock.assert_called_once()
 
-    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test")
+    @override_settings(
+        FRONTEND_SITE_URL="https://app.interaims.test",
+        INTERA_IMS_FRONTEND_SITE_URL="https://app.interaims.test",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_INTERA_IMS="",
+        COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR="",
+    )
     def test_resend_action_notifies_registered_user(self):
         invitee = User.objects.create_user(
             email="invitee@example.com",
@@ -531,7 +609,12 @@ class SupportAccessGrantTests(TestCase):
         values.update(overrides)
         return SupportAccessGrant.objects.create(**values)
 
-    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test")
+    @override_settings(
+        FRONTEND_SITE_URL="https://app.interaims.test",
+        INTERA_IMS_FRONTEND_SITE_URL="https://app.interaims.test",
+        SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_INTERA_IMS="",
+        SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_HOSPERATOR="",
+    )
     @patch("mainapps.profile.views.publish_support_access_grant_created")
     @patch("mainapps.profile.views.send_html_email")
     def test_owner_can_create_support_access_request(self, send_html_email_mock, publish_created_mock):
