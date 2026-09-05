@@ -129,6 +129,7 @@ def publish_membership_permissions_updated(
         message=f"Your workspace membership permissions were updated in {_profile_label(membership.profile)}.",
         metadata=payload,
         action_url="/notifications",
+        actor=actor,
         user_ids=[str(membership.user_id)],
         key=f"{membership.profile_id}:{membership.id}:membership-permissions",
     )
@@ -176,6 +177,7 @@ def publish_membership_changed(
         message=summary,
         metadata=payload,
         action_url="/notifications",
+        actor=actor,
         user_ids=[str(membership.user_id)],
         key=f"{membership.profile_id}:{membership.id}:{event_name}",
     )
@@ -254,6 +256,7 @@ def publish_invitation_notification(
         message=message,
         metadata=payload,
         action_url=action_url,
+        actor=actor,
         user_ids=[str(recipient.id)],
         key=f"{invitation.profile_id}:{invitation.id}:{event_name}",
     )
@@ -309,6 +312,7 @@ def publish_user_permissions_updated(
         message=f"Your direct permissions were updated in {_profile_label(profile)}.",
         metadata=payload,
         action_url="/notifications",
+        actor=actor,
         user_ids=[str(user.id)],
         key=f"{profile.id}:{user.id}:permissions",
     )
@@ -350,6 +354,7 @@ def publish_user_groups_updated(
         message=f"Your staff group membership was updated in {_profile_label(profile)}.",
         metadata=payload,
         action_url="/notifications",
+        actor=actor,
         user_ids=[str(user.id)],
         key=f"{profile.id}:{user.id}:groups",
     )
@@ -393,6 +398,7 @@ def publish_group_permissions_updated(
             message=f"Permissions for group {group.name} were updated in {_profile_label(group.profile)}.",
             metadata=payload,
             action_url="/notifications",
+            actor=actor,
             user_ids=payload["affected_user_ids"],
             key=f"{group.profile_id}:{group.id}:permissions",
         )
@@ -437,6 +443,7 @@ def publish_role_permissions_updated(
             message=f"Permissions for role {role.name} were updated in {_profile_label(role.profile)}.",
             metadata=payload,
             action_url="/notifications",
+            actor=actor,
             user_ids=recipients,
             key=f"{role.profile_id}:{role.id}:permissions",
         )
@@ -486,6 +493,7 @@ def publish_role_assignment_changed(
         message=summary,
         metadata=payload,
         action_url="/notifications",
+        actor=actor,
         user_ids=[str(user.id)],
         key=f"{profile.id}:{assignment.id}:{event_name}",
     )
@@ -532,6 +540,7 @@ def publish_group_changed(
             message=summary,
             metadata=payload,
             action_url="/notifications",
+            actor=actor,
             user_ids=recipients,
             key=f"{group.profile_id}:{group.id}:{event_name}",
         )
@@ -578,6 +587,7 @@ def publish_role_changed(
             message=summary,
             metadata=payload,
             action_url="/notifications",
+            actor=actor,
             user_ids=recipients,
             key=f"{role.profile_id}:{role.id}:{event_name}",
         )

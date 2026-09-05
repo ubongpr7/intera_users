@@ -49,6 +49,7 @@ from subapps.kafka.producers.access_control import (
 )
 from subapps.email_system.emails import send_html_email
 from subapps.pagination import OptionalPageNumberPagination
+from subapps.utils.request_context import build_frontend_url
 
 from .models import (
     CompanyMembership,
@@ -627,13 +628,13 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         return email
 
     @staticmethod
-    def _build_invitation_accept_url(invitation):
+    def _build_invitation_accept_url(request, invitation):
         template = getattr(settings, "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
-        frontend_url = getattr(settings, "FRONTEND_SITE_URL", "").strip().rstrip("/")
         if not template:
-            if not frontend_url:
-                return ""
-            return f"{frontend_url}/accounts/invitations/{quote(invitation.invitation_code, safe='')}"
+            return build_frontend_url(
+                request,
+                f"/accounts/invitations/{quote(invitation.invitation_code, safe='')}",
+            )
         try:
             return template.format(code=invitation.invitation_code)
         except (IndexError, KeyError, ValueError):
@@ -659,13 +660,13 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 "invitation_message": invitation.invitation_message.strip(),
                 "role_label": invitation.get_role_display(),
                 "expires_at": invitation.expires_at,
-                "accept_url": self._build_invitation_accept_url(invitation),
+                "accept_url": self._build_invitation_accept_url(request, invitation),
                 "recipient_email": invitation.email,
             },
         )
 
     def _publish_invitation_notification(self, request, invitation, *, event_name: str, title: str, message: str):
-        accept_url = self._build_invitation_accept_url(invitation)
+        accept_url = self._build_invitation_accept_url(request, invitation)
         transaction.on_commit(
             lambda: publish_invitation_notification(
                 invitation=invitation,
@@ -1207,7 +1208,7 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         grant = serializer.save()
-        self._send_support_access_request_email(grant)
+        self._send_support_access_request_email(request, grant)
         publish_support_access_grant_created(grant, actor=build_actor(request=request, user=request.user))
         return Response(
             SupportAccessGrantSerializer(grant, context=self.get_serializer_context()).data,
@@ -1215,19 +1216,19 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         )
 
     @staticmethod
-    def _build_support_access_accept_url(grant):
+    def _build_support_access_accept_url(request, grant):
         template = getattr(settings, "SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE", "").strip()
-        frontend_url = getattr(settings, "FRONTEND_SITE_URL", "").strip().rstrip("/")
         if not template:
-            if not frontend_url:
-                return ""
-            return f"{frontend_url}/accounts/support-access/{quote(grant.invitation_code, safe='')}"
+            return build_frontend_url(
+                request,
+                f"/accounts/support-access/{quote(grant.invitation_code, safe='')}",
+            )
         try:
             return template.format(code=grant.invitation_code)
         except (IndexError, KeyError, ValueError):
             return template
 
-    def _send_support_access_request_email(self, grant):
+    def _send_support_access_request_email(self, request, grant):
         requester_email = grant.created_by.email if grant.created_by_id else "a workspace administrator"
         preset = get_support_access_preset(grant.permission_mode)
         send_html_email(
@@ -1247,7 +1248,7 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 "membership_role": grant.get_membership_role_display(),
                 "starts_at": grant.starts_at,
                 "expires_at": grant.expires_at,
-                "accept_url": self._build_support_access_accept_url(grant),
+                "accept_url": self._build_support_access_accept_url(request, grant),
                 "invitation_code": grant.invitation_code,
                 "is_registered_user": bool(grant.grantee_user_id),
             },

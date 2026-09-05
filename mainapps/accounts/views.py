@@ -16,7 +16,7 @@ from urllib.parse import quote
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from subapps.email_system.emails import send_html_email
-from subapps.utils.request_context import get_request_profile_id
+from subapps.utils.request_context import build_frontend_url, get_request_profile_id
 from mainapps.permit.permit import HasModelRequestPermission
 from .models import ReferralPayout, User, VerificationCode
 from .legal import (
@@ -310,11 +310,10 @@ class UserViewSet(viewsets.ModelViewSet):
         def total_for(queryset):
             return queryset.aggregate(total=Sum('payout_amount')).get('total') or Decimal('0.00')
 
-        frontend_url = (
-            getattr(settings, 'FRONTEND_SITE_URL', '').rstrip('/')
-            or request.build_absolute_uri('/').rstrip('/')
+        referral_url = build_frontend_url(
+            request,
+            f"/accounts/register?ref={quote(user.referral_code)}",
         )
-        referral_url = f'{frontend_url}/accounts/register?ref={quote(user.referral_code)}' if frontend_url else ''
         return Response({
             'referral_code': user.referral_code,
             'referral_url': referral_url,

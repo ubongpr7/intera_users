@@ -1,3 +1,6 @@
+from urllib.parse import urlsplit, urlunsplit
+
+from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Q
 from rest_framework.exceptions import AuthenticationFailed
@@ -85,6 +88,50 @@ def get_request_auth_headers(request):
     if not auth_header:
         return {}
     return {"Authorization": auth_header}
+
+
+def normalize_frontend_origin(value):
+    parsed = urlsplit(str(value or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), "", "", ""))
+
+
+def allowed_frontend_origins():
+    configured = getattr(settings, "FRONTEND_ACTION_ALLOWED_ORIGINS", None)
+    if configured is None:
+        configured = getattr(settings, "CORS_ALLOWED_ORIGINS", [])
+    origins = [
+        *list(configured or []),
+        getattr(settings, "FRONTEND_SITE_URL", ""),
+        getattr(settings, "SITE_URL", ""),
+    ]
+    return {origin for origin in (normalize_frontend_origin(item) for item in origins) if origin}
+
+
+def frontend_origin_from_request(request, *, default=None):
+    candidates = [
+        request.headers.get("X-Intera-Frontend-Origin"),
+        request.headers.get("X-Frontend-Origin"),
+        request.headers.get("Origin"),
+        request.headers.get("Referer"),
+        default,
+        getattr(settings, "FRONTEND_SITE_URL", ""),
+        getattr(settings, "SITE_URL", ""),
+    ]
+    allowed = allowed_frontend_origins()
+    for candidate in candidates:
+        origin = normalize_frontend_origin(candidate)
+        if origin and (not allowed or origin in allowed):
+            return origin
+    return ""
+
+
+def build_frontend_url(request, path, *, default=None):
+    origin = frontend_origin_from_request(request, default=default)
+    if not origin:
+        return ""
+    return f"{origin}/{str(path or '').lstrip('/')}"
 
 
 def get_identity_cache_key(request, default="default"):

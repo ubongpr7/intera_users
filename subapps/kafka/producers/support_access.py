@@ -6,7 +6,7 @@ from mainapps.profile.models import SupportAccessGrant
 from subapps.kafka.client import publish_event
 from subapps.kafka.producers.platform_events import publish_workspace_notification
 from subapps.kafka.topics import SUPPORT_ACCESS_EVENTS_TOPIC
-from subapps.utils.request_context import get_request_claim, get_request_user_id
+from subapps.utils.request_context import frontend_origin_from_request, get_request_claim, get_request_user_id
 
 
 def _string(value: Any) -> str:
@@ -37,6 +37,7 @@ def build_actor(*, request=None, user=None, role: str | None = None) -> dict[str
         "email": _string(getattr(resolved_user, "email", None) or request_payload.get("email")),
         "name": _user_name(resolved_user) or _string(request_payload.get("full_name") or request_payload.get("name")),
         "role": role or _string(request_payload.get("membership_role")),
+        "frontend_origin": frontend_origin_from_request(request) if request is not None else "",
     }
 
 
@@ -155,6 +156,7 @@ def publish_support_access_grant_created(grant: SupportAccessGrant, *, actor: di
         title="Temporary support access created",
         message=f"{grant.grantee_email_snapshot} can access this workspace until {grant.expires_at.isoformat()}.",
         metadata=serialize_support_access_grant(grant),
+        actor=actor,
         key=str(grant.id),
     )
     return payload
@@ -207,6 +209,7 @@ def publish_support_access_grant_revoked(grant: SupportAccessGrant, *, actor: di
         title="Temporary support access revoked",
         message=f"{grant.grantee_email_snapshot} no longer has temporary workspace access.",
         metadata=serialize_support_access_grant(grant),
+        actor=actor,
         key=str(grant.id),
     )
     return payload

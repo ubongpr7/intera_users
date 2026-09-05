@@ -70,21 +70,27 @@ def publish_workspace_notification(
     message: str,
     metadata: dict[str, Any] | None = None,
     action_url: str | None = None,
+    frontend_origin: str | None = None,
+    actor: dict[str, Any] | None = None,
     user_ids: Iterable[Any] | None = None,
     key: str | None = None,
 ) -> dict[str, Any]:
     recipients = [_string(user_id) for user_id in (user_ids or []) if _string(user_id)]
+    resolved_frontend_origin = _string(frontend_origin or (actor or {}).get("frontend_origin"))
+    payload = {
+        "workspace_id": workspace_id,
+        "category": category,
+        "title": title,
+        "message": message,
+        "user_ids": recipients,
+        "metadata": metadata or {},
+        "action_url": action_url or "",
+    }
+    if resolved_frontend_origin:
+        payload["frontend_origin"] = resolved_frontend_origin
     return publish_event(
         NOTIFICATION_EVENTS_TOPIC,
         event_name,
-        {
-            "workspace_id": workspace_id,
-            "category": category,
-            "title": title,
-            "message": message,
-            "user_ids": recipients,
-            "metadata": metadata or {},
-            "action_url": action_url or "",
-        },
+        payload,
         key=key,
     )
