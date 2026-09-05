@@ -44,8 +44,8 @@ class FrontendOriginRequestContextTests(SimpleTestCase):
 
         assert frontend_origin_from_request(request) == "https://dev.interaims.com"
         assert (
-            build_frontend_url(request, "/accounts/register?ref=abc")
-            == "https://dev.interaims.com/accounts/register?ref=abc"
+            build_frontend_url(request, "/accounts?ref=abc")
+            == "https://dev.interaims.com/accounts?ref=abc"
         )
 
     @override_settings(

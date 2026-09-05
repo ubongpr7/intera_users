@@ -312,7 +312,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
         referral_url = build_frontend_url(
             request,
-            f"/accounts/register?ref={quote(user.referral_code)}",
+            f"/accounts?ref={quote(user.referral_code)}",
         )
         return Response({
             'referral_code': user.referral_code,
