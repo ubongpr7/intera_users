@@ -196,18 +196,20 @@ class CompanyInvitationActionTests(TestCase):
         self.auth_token = SimpleNamespace(payload={"profile_id": self.profile.id})
         self.client.force_authenticate(user=self.user, token=self.auth_token)
 
-    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test")
+    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test", COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="")
     @patch("mainapps.profile.views.send_html_email")
     @patch("mainapps.profile.views.publish_invitation_changed")
     def test_invite_sends_company_invitation_email(self, publish_invitation_changed_mock, send_html_email_mock):
         with self.captureOnCommitCallbacks(execute=True):
-            response = self.client.post(
-                "/management/invitations/invite/",
-                {"email": "invitee@example.com", "role": "member"},
-                format="json",
-            )
+            with patch("subapps.services.subscription_entitlements.enforce_subscription_limit") as enforce_limit_mock:
+                response = self.client.post(
+                    "/management/invitations/invite/",
+                    {"email": "invitee@example.com", "role": "member"},
+                    format="json",
+                )
 
         self.assertEqual(response.status_code, HTTPStatus.CREATED)
+        enforce_limit_mock.assert_not_called()
         invitation = CompanyInvitation.objects.get(email="invitee@example.com")
         self.assertEqual(invitation.profile, self.profile)
         send_html_email_mock.assert_called_once()
@@ -222,7 +224,7 @@ class CompanyInvitationActionTests(TestCase):
             f"https://app.interaims.test/accounts/invitations/{invitation.invitation_code}",
         )
 
-    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test")
+    @override_settings(FRONTEND_SITE_URL="https://app.interaims.test", COMPANY_INVITATION_ACCEPT_URL_TEMPLATE="")
     def test_invite_notifies_registered_user(self):
         invitee = User.objects.create_user(
             email="invitee@example.com",
@@ -399,13 +401,15 @@ class CompanyInvitationActionTests(TestCase):
 
         self.client.force_authenticate(user=invitee, token=SimpleNamespace(payload={}))
         with self.captureOnCommitCallbacks(execute=True):
-            response = self.client.post(
-                "/management/invitations/accept/",
-                {"invitation_code": invitation.invitation_code},
-                format="json",
-            )
+            with patch("subapps.services.subscription_entitlements.enforce_subscription_limit") as enforce_limit_mock:
+                response = self.client.post(
+                    "/management/invitations/accept/",
+                    {"invitation_code": invitation.invitation_code},
+                    format="json",
+                )
 
         self.assertEqual(response.status_code, HTTPStatus.OK)
+        enforce_limit_mock.assert_not_called()
         publish_invitation_changed_mock.assert_called_once()
         publish_membership_changed_mock.assert_called_once()
 

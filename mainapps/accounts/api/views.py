@@ -239,9 +239,7 @@ class StaffUserRegistrationAPIView(APIView):
     required_permission = "manage_company_settings"
 
     def post(self, request):
-        from mainapps.profile.views import _enforce_staff_limit
         company = get_company_or_profile(request.user)
-        _enforce_staff_limit(company)
         serializer = StaffUserCreateSerializer(data=request.data)
         
         if serializer.is_valid():

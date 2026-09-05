@@ -125,47 +125,6 @@ def _platform_from_request(request, *, data=None):
     return platform
 
 
-def _staff_usage(profile, *, include_pending=True):
-    user_ids = set(
-        CompanyMembership.objects.filter(profile=profile, is_active=True)
-        .values_list("user_id", flat=True)
-    )
-    if profile.owner_id:
-        user_ids.add(profile.owner_id)
-    user_ids.update(User.objects.filter(profile=profile).values_list("id", flat=True))
-
-    pending_count = 0
-    if include_pending:
-        active_emails = {
-            email.strip().lower()
-            for email in User.objects.filter(id__in=user_ids)
-            .exclude(email__isnull=True)
-            .values_list("email", flat=True)
-            if email
-        }
-        pending_emails = {
-            email.strip().lower()
-            for email in CompanyInvitation.objects.filter(
-                profile=profile,
-                status=CompanyInvitation.InvitationStatus.PENDING,
-                expires_at__gt=timezone.now(),
-            ).values_list("email", flat=True)
-            if email and email.strip().lower() not in active_emails
-        }
-        pending_count = len(pending_emails)
-    return len(user_ids) + pending_count
-
-
-def _enforce_staff_limit(profile, *, include_pending=True):
-    from subapps.services.subscription_entitlements import enforce_subscription_limit
-
-    return enforce_subscription_limit(
-        profile_id=profile.id,
-        feature="staff-users",
-        usage=_staff_usage(profile, include_pending=include_pending),
-    )
-
-
 def _require_subscription_service_key(request):
     expected = os.getenv("SUBSCRIPTION_SERVICE_KEY", "")
     supplied = request.headers.get("X-Intera-Service-Key", "")
@@ -193,7 +152,7 @@ class InternalSubscriptionUsageView(APIView):
         profile = CompanyProfile.objects.filter(id=profile_id).first()
         if not profile:
             return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
-        return Response({"staff-users": _staff_usage(profile)})
+        return Response({})
 
 
 class InternalHosperatorGroupMembersView(APIView):
@@ -613,7 +572,6 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         role = serializer.validated_data.get("role", CompanyMembership.MembershipRole.MEMBER)
         if role == CompanyMembership.MembershipRole.OWNER:
             raise PermissionDenied("Owner invitations are not allowed.")
-        _enforce_staff_limit(profile)
         serializer.save(profile=profile, invited_by=self.request.user)
 
     @staticmethod
@@ -636,7 +594,7 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 f"/accounts/invitations/{quote(invitation.invitation_code, safe='')}",
             )
         try:
-            return template.format(code=invitation.invitation_code)
+            return template.format(code=invitation.invitation_code, token=invitation.invitation_code)
         except (IndexError, KeyError, ValueError):
             return template
 
@@ -732,7 +690,6 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
             )
             return Response(self.get_serializer(existing_pending).data, status=status.HTTP_200_OK)
 
-        _enforce_staff_limit(profile)
         expires_days = getattr(settings, "COMPANY_INVITATION_EXPIRY_DAYS", 2)
         invitation = CompanyInvitation.objects.create(
             profile=profile,
@@ -859,11 +816,6 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 )
                 continue
 
-            try:
-                _enforce_staff_limit(profile)
-            except PermissionDenied:
-                skipped.append({"email": email, "reason": "subscription_limit_reached"})
-                continue
             invitation = CompanyInvitation.objects.create(
                 profile=profile,
                 email=email,
@@ -1023,8 +975,6 @@ class CompanyInvitationViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 {"detail": "Invitation has expired."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        _enforce_staff_limit(invitation.profile, include_pending=False)
 
         membership, created = CompanyMembership.objects.get_or_create(
             user=request.user,
@@ -1224,7 +1174,7 @@ class SupportAccessGrantViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
                 f"/accounts/support-access/{quote(grant.invitation_code, safe='')}",
             )
         try:
-            return template.format(code=grant.invitation_code)
+            return template.format(code=grant.invitation_code, token=grant.invitation_code)
         except (IndexError, KeyError, ValueError):
             return template
 
