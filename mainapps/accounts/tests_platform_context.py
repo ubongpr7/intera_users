@@ -18,7 +18,7 @@ class HosperatorPlatformContextTests(TestCase):
             name="Hosperator Owner Workspace",
         )
 
-    def test_owner_context_carries_hosperator_scoped_wildcard(self):
+    def test_owner_context_is_compact_and_carries_hosperator_site_scope(self):
         context = decode_authorization_context(
             issue_authorization_context(
                 self.owner,
@@ -29,11 +29,9 @@ class HosperatorPlatformContextTests(TestCase):
 
         self.assertTrue(context["is_owner"])
         self.assertEqual(context["platform"], PlatformChoices.HOSPERATOR)
-        self.assertIn("system:workspace-owner", context["wildcards"])
-        self.assertEqual(
-            context["wildcard_permissions"]["system:workspace-owner"],
-            ["hosperator.*"],
-        )
+        self.assertNotIn("permissions", context)
+        self.assertNotIn("wildcards", context)
+        self.assertNotIn("wildcard_permissions", context)
         self.assertEqual(
             context["hosperator_care_site_scope"],
             {"version": 1, "care_site_ids": ["*"]},

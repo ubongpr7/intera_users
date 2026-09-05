@@ -118,34 +118,30 @@ def _hosperator_care_site_scope(user, profile):
     }
 
 
-def issue_authorization_context(user, *, profile=None, support_grant=None, platform=PlatformChoices.INTERA_IMS) -> str:
-    now = datetime.now(timezone.utc)
-    direct_permissions = set(
+def _context_embeds_permission_claims() -> bool:
+    value = getattr(settings, "AUTHORIZATION_CONTEXT_EMBED_PERMISSION_CLAIMS", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _direct_permissions(user, *, profile=None, support_grant=None, platform=PlatformChoices.INTERA_IMS) -> set[str]:
+    permissions = set(
         user.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
     )
     if profile is not None and support_grant is None:
         membership = CompanyMembership.objects.filter(user=user, profile=profile, is_active=True).first()
         if membership:
-            direct_permissions.update(
+            permissions.update(
                 membership.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
             )
     if support_grant is not None:
-        direct_permissions.update(support_grant.effective_permission_codenames())
-    wildcards, wildcard_permissions = _system_access(user, profile, platform) if profile is not None else ([], {})
-    # A workspace owner is the tenant's final authority. Hosperator services
-    # consume authorization contexts rather than access-token permissions, so
-    # represent that authority as a scoped, immutable wildcard in the context.
-    # Inventory retains its established owner enforcement through its services.
-    if (
-        profile is not None
-        and support_grant is None
-        and profile.owner_id == user.id
-        and platform == PlatformChoices.HOSPERATOR
-    ):
-        owner_wildcard = "system:workspace-owner"
-        if owner_wildcard not in wildcards:
-            wildcards.append(owner_wildcard)
-        wildcard_permissions[owner_wildcard] = ["hosperator.*"]
+        permissions.update(support_grant.effective_permission_codenames())
+    return permissions
+
+
+def issue_authorization_context(user, *, profile=None, support_grant=None, platform=PlatformChoices.INTERA_IMS) -> str:
+    now = datetime.now(timezone.utc)
     payload = {
         "token_type": AUTHORIZATION_CONTEXT_TOKEN_TYPE,
         "jti": str(uuid4()),
@@ -167,13 +163,65 @@ def issue_authorization_context(user, *, profile=None, support_grant=None, platf
         "is_staff": bool(user.is_staff),
         "is_superuser": bool(user.is_superuser),
         "is_owner": bool(profile and profile.owner_id == user.id),
-        "permissions": sorted(direct_permissions),
-        "wildcards": wildcards,
-        "wildcard_permissions": wildcard_permissions,
     }
     if platform == PlatformChoices.HOSPERATOR:
         payload["hosperator_care_site_scope"] = _hosperator_care_site_scope(user, profile)
+    if _context_embeds_permission_claims():
+        wildcards, wildcard_permissions = _system_access(user, profile, platform) if profile is not None else ([], {})
+        if (
+            profile is not None
+            and support_grant is None
+            and profile.owner_id == user.id
+            and platform == PlatformChoices.HOSPERATOR
+        ):
+            owner_wildcard = "system:workspace-owner"
+            if owner_wildcard not in wildcards:
+                wildcards.append(owner_wildcard)
+            wildcard_permissions[owner_wildcard] = ["hosperator.*"]
+        payload["permissions"] = sorted(_direct_permissions(user, profile=profile, support_grant=support_grant, platform=platform))
+        payload["wildcards"] = wildcards
+        payload["wildcard_permissions"] = wildcard_permissions
     return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
+
+
+def _matches_permission(required: str, granted_permissions: set[str]) -> bool:
+    return any(
+        granted == required
+        or (granted.endswith(".*") and required.startswith(granted[:-1]))
+        for granted in granted_permissions
+    )
+
+
+def evaluate_permission_grants(
+    user,
+    *,
+    profile=None,
+    support_grant=None,
+    platform=PlatformChoices.INTERA_IMS,
+    permissions: list[str] | tuple[str, ...] | set[str] = (),
+) -> dict[str, bool]:
+    requested = [str(permission or "").strip() for permission in permissions]
+    requested = [permission for permission in requested if permission]
+    if not requested:
+        return {}
+
+    granted_permissions = _direct_permissions(
+        user,
+        profile=profile,
+        support_grant=support_grant,
+        platform=platform,
+    )
+    wildcards, wildcard_permissions = _system_access(user, profile, platform) if profile is not None else ([], {})
+    for wildcard in wildcards:
+        granted_permissions.update(wildcard_permissions.get(wildcard) or [])
+    if (
+        profile is not None
+        and support_grant is None
+        and profile.owner_id == user.id
+        and platform == PlatformChoices.HOSPERATOR
+    ):
+        granted_permissions.add("hosperator.*")
+    return {permission: _matches_permission(permission, granted_permissions) for permission in requested}
 
 
 def issue_websocket_ticket(context_payload: dict) -> str:

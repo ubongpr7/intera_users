@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
@@ -160,9 +160,89 @@ class PermitApiViewTests(TestCase):
     def test_user_profile_access_recognizes_active_company_membership_even_when_profile_pointer_diff(self):
         self.assertTrue(_user_has_profile_access(self.member, self.active_profile))
 
+    @override_settings(PERMISSION_EVALUATION_SERVICE_KEY="test-permission-evaluator", PERMISSION_EVALUATION_CACHE_TTL_SECONDS=99)
+    def test_internal_permission_evaluation_returns_scoped_grants(self):
+        permission, _ = CustomUserPermission.objects.get_or_create(
+            codename="view_audit_trail",
+            platform=PlatformChoices.INTERA_IMS,
+            defaults={"category": self.permission_category},
+        )
+        self.member.custom_permissions.add(permission)
+
+        response = self.client.post(
+            "/permission_api/internal/evaluate-permissions/",
+            {
+                "user_id": str(self.member.id),
+                "profile_id": str(self.active_profile.id),
+                "platform": PlatformChoices.INTERA_IMS,
+                "permissions": ["view_audit_trail", "manage_company_settings"],
+            },
+            format="json",
+            HTTP_X_INTERA_SERVICE_KEY="test-permission-evaluator",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["expires_in"], 99)
+        self.assertEqual(
+            response.data["grants"],
+            {"view_audit_trail": True, "manage_company_settings": False},
+        )
+
+    @override_settings(PERMISSION_EVALUATION_SERVICE_KEY="test-permission-evaluator")
+    def test_internal_permission_evaluation_rejects_missing_service_key(self):
+        response = self.client.post(
+            "/permission_api/internal/evaluate-permissions/",
+            {
+                "user_id": str(self.member.id),
+                "profile_id": str(self.active_profile.id),
+                "platform": PlatformChoices.INTERA_IMS,
+                "permissions": ["view_audit_trail"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_effective_permissions_returns_active_profile_permissions(self):
+        permission, _ = CustomUserPermission.objects.get_or_create(
+            codename="view_audit_trail",
+            platform=PlatformChoices.INTERA_IMS,
+            defaults={"category": self.permission_category},
+        )
+        self.member.custom_permissions.add(permission)
+        self.client.force_authenticate(
+            user=self.member,
+            token=SimpleNamespace(payload={"profile_id": str(self.active_profile.id), "platform": PlatformChoices.INTERA_IMS}),
+        )
+
+        response = self.client.get(
+            "/permission_api/me/effective-permissions/",
+            {"platform": PlatformChoices.INTERA_IMS},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["user_id"], str(self.member.id))
+        self.assertEqual(response.data["profile_id"], str(self.active_profile.id))
+        self.assertEqual(response.data["platform"], PlatformChoices.INTERA_IMS)
+        self.assertFalse(response.data["is_owner"])
+        self.assertIn("view_audit_trail", response.data["permissions"])
+
+    def test_effective_permissions_requires_active_profile(self):
+        self.client.force_authenticate(
+            user=self.member,
+            token=SimpleNamespace(payload={"platform": PlatformChoices.INTERA_IMS}),
+        )
+
+        response = self.client.get("/permission_api/me/effective-permissions/")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("profile_id", response.data)
+
     def test_user_access_queryset_scopes_members_without_system_role_filter(self):
         request = self.factory.get(f"/permission_api/users/{self.member.id}/permissions/")
         force_authenticate(request, user=self.owner, token=self.auth_token)
+        request.user = self.owner
+        request.auth = self.auth_token
         view = UserAccessViewSet()
         view.request = request
 

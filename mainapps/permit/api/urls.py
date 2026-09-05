@@ -2,7 +2,9 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    EffectivePermissionView,
     GroupAccessViewSet,
+    InternalPermissionEvaluationView,
     RoleAccessViewSet,
     RoleAssignmentViewSet,
     UserAccessViewSet,
@@ -16,6 +18,16 @@ router.register(r"roles", RoleAccessViewSet, basename="role-access")
 
 urlpatterns = [
     path("", include(router.urls)),
+    path(
+        "me/effective-permissions/",
+        EffectivePermissionView.as_view(),
+        name="effective-permissions",
+    ),
+    path(
+        "internal/evaluate-permissions/",
+        InternalPermissionEvaluationView.as_view(),
+        name="internal-evaluate-permissions",
+    ),
     path(
         "user/<str:pk>/groups/",
         UserAccessViewSet.as_view({"get": "groups", "put": "groups"}),

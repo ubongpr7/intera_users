@@ -3,8 +3,11 @@ from __future__ import annotations
 from typing import Iterable
 
 from mainapps.accounts.models import User
+from mainapps.permit.models import PlatformChoices
 from mainapps.profile.models import CompanyInvitation, CompanyMembership, CompanyProfile, StaffGroup, StaffRole, StaffRoleAssignment
 from subapps.kafka.producers.platform_events import publish_audit_fact, publish_workspace_notification
+from subapps.kafka.client import publish_event
+from subapps.kafka.topics import IDENTITY_PERMISSION_CONTEXT_TOPIC
 
 
 def _string(value) -> str:
@@ -92,6 +95,33 @@ def _membership_permissions(membership: CompanyMembership) -> list[str]:
     )
 
 
+def publish_permission_context_invalidated(
+    *,
+    profile: CompanyProfile,
+    user_ids: Iterable,
+    platform: str = "",
+    reason: str,
+) -> None:
+    recipients = sorted({_string(user_id) for user_id in user_ids if _string(user_id)})
+    if not recipients:
+        return
+    platforms = [platform] if platform else [PlatformChoices.INTERA_IMS, PlatformChoices.HOSPERATOR]
+    for item in platforms:
+        payload = {
+            "profile_id": str(profile.id),
+            "company_code": _string(profile.company_code),
+            "platform": item,
+            "reason": reason,
+            "user_ids": recipients,
+        }
+        publish_event(
+            IDENTITY_PERMISSION_CONTEXT_TOPIC,
+            "identity.permission_context.invalidated",
+            payload,
+            key=f"{profile.id}:{item}:permission-context",
+        )
+
+
 def publish_membership_permissions_updated(
     *,
     actor: dict,
@@ -132,6 +162,11 @@ def publish_membership_permissions_updated(
         actor=actor,
         user_ids=[str(membership.user_id)],
         key=f"{membership.profile_id}:{membership.id}:membership-permissions",
+    )
+    publish_permission_context_invalidated(
+        profile=membership.profile,
+        user_ids=[membership.user_id],
+        reason="membership_permissions_updated",
     )
 
 
@@ -180,6 +215,11 @@ def publish_membership_changed(
         actor=actor,
         user_ids=[str(membership.user_id)],
         key=f"{membership.profile_id}:{membership.id}:{event_name}",
+    )
+    publish_permission_context_invalidated(
+        profile=membership.profile,
+        user_ids=[membership.user_id],
+        reason=event_name,
     )
 
 
@@ -316,6 +356,11 @@ def publish_user_permissions_updated(
         user_ids=[str(user.id)],
         key=f"{profile.id}:{user.id}:permissions",
     )
+    publish_permission_context_invalidated(
+        profile=profile,
+        user_ids=[user.id],
+        reason="user_permissions_updated",
+    )
 
 
 def publish_user_groups_updated(
@@ -357,6 +402,11 @@ def publish_user_groups_updated(
         actor=actor,
         user_ids=[str(user.id)],
         key=f"{profile.id}:{user.id}:groups",
+    )
+    publish_permission_context_invalidated(
+        profile=profile,
+        user_ids=[user.id],
+        reason="user_groups_updated",
     )
 
 
@@ -402,6 +452,12 @@ def publish_group_permissions_updated(
             user_ids=payload["affected_user_ids"],
             key=f"{group.profile_id}:{group.id}:permissions",
         )
+        publish_permission_context_invalidated(
+            profile=group.profile,
+            user_ids=payload["affected_user_ids"],
+            platform=group.platform,
+            reason="group_permissions_updated",
+        )
 
 
 def publish_role_permissions_updated(
@@ -446,6 +502,12 @@ def publish_role_permissions_updated(
             actor=actor,
             user_ids=recipients,
             key=f"{role.profile_id}:{role.id}:permissions",
+        )
+        publish_permission_context_invalidated(
+            profile=role.profile,
+            user_ids=recipients,
+            platform=role.platform,
+            reason="role_permissions_updated",
         )
 
 
@@ -497,6 +559,12 @@ def publish_role_assignment_changed(
         user_ids=[str(user.id)],
         key=f"{profile.id}:{assignment.id}:{event_name}",
     )
+    publish_permission_context_invalidated(
+        profile=profile,
+        user_ids=[user.id],
+        platform=role.platform,
+        reason=event_name,
+    )
 
 
 def publish_group_changed(
@@ -543,6 +611,12 @@ def publish_group_changed(
             actor=actor,
             user_ids=recipients,
             key=f"{group.profile_id}:{group.id}:{event_name}",
+        )
+        publish_permission_context_invalidated(
+            profile=group.profile,
+            user_ids=recipients,
+            platform=group.platform,
+            reason=event_name,
         )
 
 
@@ -591,6 +665,12 @@ def publish_role_changed(
             user_ids=recipients,
             key=f"{role.profile_id}:{role.id}:{event_name}",
         )
+        publish_permission_context_invalidated(
+            profile=role.profile,
+            user_ids=recipients,
+            platform=role.platform,
+            reason=event_name,
+        )
 
 
 __all__ = [
@@ -601,6 +681,7 @@ __all__ = [
     "publish_invitation_changed",
     "publish_membership_changed",
     "publish_membership_permissions_updated",
+    "publish_permission_context_invalidated",
     "publish_role_assignment_changed",
     "publish_role_changed",
     "publish_role_permissions_updated",

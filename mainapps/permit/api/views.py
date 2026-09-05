@@ -1,11 +1,18 @@
+import os
+import secrets
+
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
+from django.conf import settings
+from rest_framework.views import APIView
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from mainapps.accounts.models import User
+from mainapps.accounts.authorization_context import evaluate_permission_grants
+from mainapps.accounts.serializers import MyTokenObtainPairSerializer
 from mainapps.common.settings import get_company_or_profile
 from mainapps.permit.models import CustomUserPermission, PlatformChoices
 from mainapps.permit.permit import HasModelRequestPermission, PermissionRequiredMixin
@@ -83,6 +90,113 @@ def _validated_permissions(codenames, platform):
     if invalid:
         raise ValidationError({"detail": f"Invalid {platform} permissions: {', '.join(sorted(invalid))}"})
     return valid_permissions
+
+
+def _require_permission_evaluation_service_key(request):
+    expected = (
+        getattr(settings, "PERMISSION_EVALUATION_SERVICE_KEY", "")
+        or os.getenv("PERMISSION_EVALUATION_SERVICE_KEY", "")
+        or os.getenv("INTERA_INTERNAL_SERVICE_KEY", "")
+        or os.getenv("SUBSCRIPTION_SERVICE_KEY", "")
+    )
+    supplied = request.headers.get("X-Intera-Service-Key", "")
+    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+        raise PermissionDenied("Invalid permission evaluation service key.")
+
+
+class InternalPermissionEvaluationView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        _require_permission_evaluation_service_key(request)
+        data = request.data if isinstance(request.data, dict) else {}
+        user_id = data.get("user_id")
+        profile_id = data.get("profile_id")
+        platform = data.get("platform") or PlatformChoices.INTERA_IMS
+        requested_permissions = data.get("permissions") or []
+
+        if platform not in PlatformChoices.values:
+            raise ValidationError({"platform": "Unknown platform."})
+        if not user_id:
+            raise ValidationError({"user_id": "This field is required."})
+        if not profile_id:
+            raise ValidationError({"profile_id": "This field is required."})
+        if not isinstance(requested_permissions, list):
+            raise ValidationError({"permissions": "Expected a list of permission codenames."})
+
+        user = User.objects.filter(id=user_id, is_active=True).first()
+        if not user:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        active_profile = get_company_or_profile(user, profile_id=profile_id)
+        if not active_profile:
+            raise PermissionDenied("Profile context is not accessible for this user.")
+
+        grants = evaluate_permission_grants(
+            user,
+            profile=active_profile,
+            platform=platform,
+            permissions=requested_permissions,
+        )
+        return Response(
+            {
+                "user_id": str(user.id),
+                "profile_id": str(active_profile.id),
+                "platform": platform,
+                "grants": grants,
+                "expires_in": int(getattr(settings, "PERMISSION_EVALUATION_CACHE_TTL_SECONDS", 3600)),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class EffectivePermissionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        auth_payload = {}
+        auth = getattr(request, "auth", None)
+        if auth is not None and hasattr(auth, "payload"):
+            auth_payload = auth.payload
+
+        profile_id = request.query_params.get("profile_id") or auth_payload.get("profile_id")
+        support_access_grant_id = auth_payload.get("support_access_grant_id")
+        platform = request.query_params.get("platform") or auth_payload.get("platform") or PlatformChoices.INTERA_IMS
+        if platform not in PlatformChoices.values:
+            raise ValidationError({"platform": "Unknown platform."})
+        if not profile_id:
+            raise ValidationError({"profile_id": "No active company context. Create or switch workspace first."})
+
+        profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
+            request.user,
+            profile_id=profile_id,
+            support_access_grant_id=support_access_grant_id,
+        )
+        active_profile = profile_access.profile
+        if not active_profile:
+            raise PermissionDenied("Profile context is not accessible for this user.")
+
+        permissions_list = MyTokenObtainPairSerializer.get_all_permissions(
+            request.user,
+            profile=active_profile,
+            support_grant=profile_access.support_grant,
+            platform=platform,
+        )
+        is_owner = bool(active_profile.owner_id == request.user.id and profile_access.support_grant is None)
+        return Response(
+            {
+                "user_id": str(request.user.id),
+                "profile_id": str(active_profile.id),
+                "platform": platform,
+                "is_owner": is_owner,
+                "is_staff": bool(request.user.is_staff),
+                "is_superuser": bool(request.user.is_superuser),
+                "permissions": permissions_list,
+                "expires_in": int(getattr(settings, "PERMISSION_EVALUATION_CACHE_TTL_SECONDS", 3600)),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class RoleAssignmentViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
