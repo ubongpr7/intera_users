@@ -94,6 +94,9 @@ def normalize_frontend_origin(value):
     parsed = urlsplit(str(value or "").strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
+    hostname = str(parsed.hostname or "").lower()
+    if "ospirator" in hostname or "ospirito" in hostname:
+        return ""
     return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), "", "", ""))
 
 

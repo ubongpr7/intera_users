@@ -19,7 +19,7 @@ def _static_asset_url(path):
 
 def _brand_for_frontend(frontend_site):
     normalized = str(frontend_site or "").lower()
-    if "hosperator" in normalized or "ospirator" in normalized:
+    if "hosperator" in normalized:
         return {
             "name": "Hosperator",
             "support_email": "support@hosperator.com",

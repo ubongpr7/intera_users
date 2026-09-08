@@ -2,7 +2,7 @@ from django.core import mail
 from django.test import RequestFactory, TestCase, override_settings
 from rest_framework.test import APIClient
 
-from mainapps.accounts.emails import InteraActivationEmail, InteraPasswordResetEmail
+from mainapps.accounts.emails import InteraActivationEmail, InteraPasswordResetEmail, _brand_for_frontend
 from mainapps.accounts.models import User
 
 
@@ -60,6 +60,10 @@ class ActivationEmailRenderingTests(TestCase):
         self.assertIn("https://dev.interaims.com/activate/", message.body)
         self.assertNotIn("Hosperator", message.body)
         self.assertIn("https://assets.example/intera-email-logo.png", message.alternatives[0][0])
+
+    def test_misspelled_hosperator_domains_never_select_hosperator_branding(self):
+        for origin in ("https://dev.ospirator.com", "https://dev.ospirito.com"):
+            self.assertEqual(_brand_for_frontend(origin)["name"], "Intera IMS")
 
     def test_password_reset_email_renders_non_empty_subject_and_body(self):
         request = self.factory.post(

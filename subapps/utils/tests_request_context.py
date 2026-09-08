@@ -53,6 +53,25 @@ class FrontendOriginRequestContextTests(SimpleTestCase):
         SITE_URL="https://dev.interaims.com",
         FRONTEND_ACTION_ALLOWED_ORIGINS=[
             "https://dev.interaims.com",
+            "https://dev.ospirator.com",
+            "https://dev.ospirito.com",
+        ],
+    )
+    def test_rejects_misspelled_hosperator_origins_even_if_configured(self):
+        for origin in ("https://dev.ospirator.com", "https://dev.ospirito.com"):
+            request = self.factory.post(
+                "/djoser/users/",
+                HTTP_X_INTERA_FRONTEND_ORIGIN=origin,
+            )
+
+            assert frontend_origin_from_request(request) == "https://dev.interaims.com"
+            assert origin not in build_frontend_url(request, "/activate/uid/token")
+
+    @override_settings(
+        FRONTEND_SITE_URL="https://dev.interaims.com",
+        SITE_URL="https://dev.interaims.com",
+        FRONTEND_ACTION_ALLOWED_ORIGINS=[
+            "https://dev.interaims.com",
             "https://dev.hosperator.com",
         ],
     )
