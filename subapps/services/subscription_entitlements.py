@@ -10,7 +10,7 @@ def enforce_subscription_limit(*, profile_id, feature, usage, requested=1):
     if mode == 'off': return None
     req = request.Request(
         f"{os.getenv('SUBSCRIPTION_SERVICE_URL', 'http://subscriptions:8550').rstrip('/')}/internal/v1/entitlements/",
-        data=json.dumps({'profile_id': str(profile_id), 'feature': feature, 'usage': usage, 'requested': requested}).encode(), method='POST',
+        data=json.dumps({'profile_id': str(profile_id), 'application': 'intera-ims', 'feature': feature, 'usage': usage, 'requested': requested}).encode(), method='POST',
         headers={'Content-Type': 'application/json', 'X-Intera-Service-Key': os.getenv('SUBSCRIPTION_SERVICE_KEY', '')},
     )
     try:
