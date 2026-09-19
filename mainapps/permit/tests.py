@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
@@ -10,12 +10,54 @@ from mainapps.permit.models import CustomUserPermission, PermissionCategory, Pla
 from mainapps.profile.models import CompanyProfile
 from mainapps.profile.models import CompanyMembership, StaffGroup, StaffRole, StaffRoleAssignment
 from mainapps.permit.api.views import RoleAccessViewSet, UserAccessViewSet, _user_has_profile_access
+from mainapps.permit.permit import HasModelRequestPermission
 from subapps.kafka.producers.access_control import (
     publish_group_permissions_updated,
     publish_role_permissions_updated,
     publish_user_groups_updated,
     publish_user_permissions_updated,
 )
+
+
+class PermissionClaimBoundaryTests(SimpleTestCase):
+    @patch("mainapps.permit.permit.evaluate_permission_grants")
+    @patch("mainapps.permit.permit.get_company_or_profile")
+    @patch("mainapps.permit.permit.validate_support_token", return_value=True)
+    def test_embedded_token_permission_does_not_bypass_authoritative_evaluation(
+        self,
+        _validate_support_token,
+        get_company_or_profile,
+        evaluate_permission_grants,
+    ):
+        user = SimpleNamespace(
+            id=17,
+            profile_id=2,
+            is_authenticated=True,
+            is_staff=False,
+            is_superuser=False,
+        )
+        get_company_or_profile.return_value = SimpleNamespace(owner_id=99)
+        evaluate_permission_grants.return_value = {"manage_company_settings": False}
+        request = SimpleNamespace(
+            user=user,
+            auth=SimpleNamespace(
+                payload={
+                    "profile_id": "2",
+                    "platform": PlatformChoices.INTERA_IMS,
+                    "permissions": ["manage_company_settings"],
+                }
+            ),
+        )
+        view = SimpleNamespace(required_permission="manage_company_settings", action=None)
+
+        self.assertFalse(HasModelRequestPermission().has_permission(request, view))
+        evaluate_permission_grants.assert_called_once_with(
+            user,
+            profile=get_company_or_profile.return_value,
+            support_grant=None,
+            platform=PlatformChoices.INTERA_IMS,
+            permissions=["manage_company_settings"],
+        )
 
 
 class AccessControlProducerTests(TestCase):

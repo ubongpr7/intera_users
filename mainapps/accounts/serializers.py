@@ -248,9 +248,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["support_access_expires_at"] = (
             support_grant.expires_at.isoformat() if support_grant else None
         )
-        token["support_access_scope"] = (
-            support_grant.effective_permission_codenames() if support_grant else None
-        )
         token["support_access_mode"] = support_grant.permission_mode if support_grant else None
         token["support_actor_type"] = "support" if support_grant else "workspace_member"
 

@@ -1,4 +1,4 @@
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from mainapps.accounts.authorization_context import decode_authorization_context, issue_authorization_context
 from mainapps.accounts.models import User
@@ -18,6 +18,7 @@ class HosperatorPlatformContextTests(TestCase):
             name="Hosperator Owner Workspace",
         )
 
+    @override_settings(AUTHORIZATION_CONTEXT_EMBED_PERMISSION_CLAIMS=True)
     def test_owner_context_is_compact_and_carries_hosperator_site_scope(self):
         context = decode_authorization_context(
             issue_authorization_context(

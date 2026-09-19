@@ -1,43 +1,18 @@
 from rest_framework import permissions
-import logging
 
-logger = logging.getLogger(__name__)
-
-from rest_framework_simplejwt.tokens import UntypedToken
-from mainapps.accounts.authorization_context import authorization_context_from_request
+from mainapps.accounts.authorization_context import evaluate_permission_grants
+from mainapps.common.settings import get_company_or_profile
+from mainapps.permit.models import PlatformChoices
 from mainapps.profile.support_access import validate_support_token
 
 class HasModelRequestPermission(permissions.BasePermission):
     """
-    Microservice-adapted permission class that checks permissions via user service
+    Resolve management permissions from the Users source of record.
+
+    Detailed permission and wildcard claims are intentionally not read from the
+    access JWT or authorization context. Those claims can be stale and make the
+    token grow with every workspace assignment.
     """
-    def get_user_permissions(self, token_str):
-        try:
-            token= UntypedToken(token_str)
-            return set(token.payload.get('permissions') or []), token.payload.get('owner_id'), token.payload
-        except Exception:
-            return set(), None, {}
-
-    def get_context_permissions(self, request):
-        try:
-            context = authorization_context_from_request(request)
-        except Exception:
-            return set()
-        permissions = set(context.get("permissions") or [])
-        wildcard_permissions = context.get("wildcard_permissions") or {}
-        for wildcard in context.get("wildcards") or []:
-            permissions.update(wildcard_permissions.get(wildcard) or [])
-        return permissions
-
-    @staticmethod
-    def _matches_permission(required, granted_permissions):
-        """Support scoped wildcard grants without making broad strings implicit."""
-        return any(
-            granted == required
-            or (granted.endswith(".*") and required.startswith(granted[:-1]))
-            for granted in granted_permissions
-        )
-
     @staticmethod
     def _resolve_required_permission(permission, request):
         """Map shared management APIs to the active product's access permission."""
@@ -74,34 +49,49 @@ class HasModelRequestPermission(permissions.BasePermission):
             return True
 
         token = getattr(request, "auth", None)
-        if token is not None and hasattr(token, "payload"):
-            payload = token.payload
-            if not validate_support_token(
-                request.user,
-                profile_id=payload.get("profile_id"),
-                support_access_grant_id=payload.get("support_access_grant_id"),
-            ):
-                return False
-            user_permissions = self.get_context_permissions(request)
-            owner_id = payload.get("owner_id")
-        else:
-            auth_header = request.headers.get('Authorization', '')
-            parts = auth_header.split()
-            if len(parts) != 2 or parts[0].lower() != "bearer":
-                return False
-            _, owner_id, payload = self.get_user_permissions(parts[1])
-            user_permissions = self.get_context_permissions(request)
-            if not validate_support_token(
-                request.user,
-                profile_id=payload.get("profile_id"),
-                support_access_grant_id=payload.get("support_access_grant_id"),
-            ):
-                return False
+        payload = getattr(token, "payload", {}) if token is not None else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        profile_id = payload.get("profile_id") or getattr(request.user, "profile_id", None)
+        support_access_grant_id = payload.get("support_access_grant_id")
+        if not validate_support_token(
+            request.user,
+            profile_id=profile_id,
+            support_access_grant_id=support_access_grant_id,
+        ):
+            return False
 
-        if owner_id and str(owner_id) == str(request.user.id):
+        profile = get_company_or_profile(
+            request.user,
+            profile_id=profile_id,
+            support_access_grant_id=support_access_grant_id,
+        )
+        if not profile:
+            return False
+        if profile.owner_id == request.user.id and not support_access_grant_id:
             return True
+        platform = payload.get("platform") or PlatformChoices.INTERA_IMS
+        if platform not in PlatformChoices.values:
+            return False
+        support_grant = None
+        if support_access_grant_id:
+            from mainapps.profile.support_access import get_active_support_grant
 
-        return self._matches_permission(permission, user_permissions)
+            support_grant = get_active_support_grant(
+                request.user,
+                profile=profile,
+                grant_id=support_access_grant_id,
+            )
+            if not support_grant:
+                return False
+        grants = evaluate_permission_grants(
+            request.user,
+            profile=profile,
+            support_grant=support_grant,
+            platform=platform,
+            permissions=[permission],
+        )
+        return bool(grants.get(permission))
         
 class PermissionRequiredMixin:
     """

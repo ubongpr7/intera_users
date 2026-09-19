@@ -118,13 +118,6 @@ def _hosperator_care_site_scope(user, profile):
     }
 
 
-def _context_embeds_permission_claims() -> bool:
-    value = getattr(settings, "AUTHORIZATION_CONTEXT_EMBED_PERMISSION_CLAIMS", False)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
 def _direct_permissions(user, *, profile=None, support_grant=None, platform=PlatformChoices.INTERA_IMS) -> set[str]:
     permissions = set(
         user.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
@@ -166,21 +159,6 @@ def issue_authorization_context(user, *, profile=None, support_grant=None, platf
     }
     if platform == PlatformChoices.HOSPERATOR:
         payload["hosperator_care_site_scope"] = _hosperator_care_site_scope(user, profile)
-    if _context_embeds_permission_claims():
-        wildcards, wildcard_permissions = _system_access(user, profile, platform) if profile is not None else ([], {})
-        if (
-            profile is not None
-            and support_grant is None
-            and profile.owner_id == user.id
-            and platform == PlatformChoices.HOSPERATOR
-        ):
-            owner_wildcard = "system:workspace-owner"
-            if owner_wildcard not in wildcards:
-                wildcards.append(owner_wildcard)
-            wildcard_permissions[owner_wildcard] = ["hosperator.*"]
-        payload["permissions"] = sorted(_direct_permissions(user, profile=profile, support_grant=support_grant, platform=platform))
-        payload["wildcards"] = wildcards
-        payload["wildcard_permissions"] = wildcard_permissions
     return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
 
 
@@ -241,9 +219,6 @@ def issue_websocket_ticket(context_payload: dict) -> str:
         "access_context_hash": context_payload.get("access_context_hash"),
         "is_staff": bool(context_payload.get("is_staff")),
         "is_owner": bool(context_payload.get("is_owner")),
-        "permissions": list(context_payload.get("permissions") or []),
-        "wildcards": list(context_payload.get("wildcards") or []),
-        "wildcard_permissions": context_payload.get("wildcard_permissions") or {},
     }
     return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
 
@@ -290,7 +265,6 @@ def decode_authorization_context(token: str) -> dict:
         raise AuthenticationFailed("Authorization context is invalid.")
     return payload
 
-
 def authorization_context_from_request(request) -> dict:
     token = request.headers.get(AUTHORIZATION_CONTEXT_HEADER)
     if not token:
@@ -306,20 +280,3 @@ def authorization_context_from_request(request) -> dict:
     if payload.get("access_context_hash") != expected:
         raise AuthenticationFailed("Authorization context does not match the access token.")
     return payload
-
-
-def has_context_permission(payload: dict, required: str) -> bool:
-    granted_permissions = set(payload.get("permissions") or [])
-    if any(
-        granted == required
-        or (granted.endswith(".*") and required.startswith(granted[:-1]))
-        for granted in granted_permissions
-    ):
-        return True
-    wildcard_permissions = payload.get("wildcard_permissions") or {}
-    return any(
-        granted == required
-        or (granted.endswith(".*") and required.startswith(granted[:-1]))
-        for wildcard in payload.get("wildcards") or []
-        for granted in set(wildcard_permissions.get(wildcard) or [])
-    )

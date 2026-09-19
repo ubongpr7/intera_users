@@ -16,7 +16,7 @@ from django.utils import timezone
 from rest_framework import filters, status, viewsets
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError as DRFValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -195,6 +195,19 @@ def _require_subscription_service_key(request):
         raise PermissionDenied("Invalid subscription service key.")
 
 
+def _require_hosperator_core_service_key(request):
+    """Authenticate the narrow Core membership-read boundary with an internal key."""
+    expected = (
+        getattr(settings, "PERMISSION_EVALUATION_SERVICE_KEY", "")
+        or os.getenv("PERMISSION_EVALUATION_SERVICE_KEY", "")
+        or os.getenv("INTERA_INTERNAL_SERVICE_KEY", "")
+        or os.getenv("SUBSCRIPTION_SERVICE_KEY", "")
+    )
+    supplied = request.headers.get("X-Intera-Service-Key", "")
+    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+        raise PermissionDenied("Invalid Hosperator Core service key.")
+
+
 def _require_hosperator_notification_service_token(request):
     """Authenticate Notification's minimum-necessary group-membership read."""
     expected = os.getenv("HOSPERATOR_NOTIFICATION_SERVICE_TOKEN", "")
@@ -203,6 +216,25 @@ def _require_hosperator_notification_service_token(request):
     token = supplied.strip() if separator and scheme.lower() == "bearer" else ""
     if not expected or not token or not secrets.compare_digest(expected, token):
         raise PermissionDenied("Invalid Hosperator notification service token.")
+
+
+def _require_hosperator_group_members_service_token(request):
+    """Allow only a dedicated Core or Notification token to resolve group members."""
+    authorization = str(request.headers.get("Authorization", "")).strip()
+    scheme, separator, supplied = authorization.partition(" ")
+    token = supplied.strip() if separator and scheme.lower() == "bearer" else ""
+    accepted_tokens = {
+        value
+        for value in (
+            os.getenv("HOSPERATOR_NOTIFICATION_SERVICE_TOKEN", ""),
+            os.getenv("HOSPERATOR_CORE_GROUP_MEMBERS_SERVICE_TOKEN", ""),
+        )
+        if value
+    }
+    if not token or not accepted_tokens or not any(
+        secrets.compare_digest(expected, token) for expected in accepted_tokens
+    ):
+        raise PermissionDenied("Invalid Hosperator group-members service token.")
 
 
 class InternalSubscriptionUsageView(APIView):
@@ -219,14 +251,14 @@ class InternalSubscriptionUsageView(APIView):
 
 
 class InternalHosperatorGroupMembersView(APIView):
-    """Resolve one active group for Notification without exposing staff details or permissions."""
+    """Resolve one active group for authorised Hosperator internal consumers."""
 
     authentication_classes = []
     permission_classes = []
     _maximum_members = 200
 
     def get(self, request, profile_id, group_id):
-        _require_hosperator_notification_service_token(request)
+        _require_hosperator_group_members_service_token(request)
         group = (
             StaffGroup.objects.select_related("profile")
             .filter(pk=group_id, profile_id=profile_id, is_active=True)
@@ -257,6 +289,53 @@ class InternalHosperatorGroupMembersView(APIView):
                 "profile_id": profile_id,
                 "group_id": str(group_id),
                 "member_user_ids": [str(user_id) for user_id in member_user_ids],
+            }
+        )
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class InternalHosperatorProfileMembersView(APIView):
+    """Resolve active opaque workspace members for Core assignment validation."""
+
+    authentication_classes = []
+    permission_classes = []
+    _maximum_members = 200
+
+    def post(self, request, profile_id):
+        _require_hosperator_core_service_key(request)
+        raw_user_ids = request.data.get("user_ids")
+        if (
+            not isinstance(raw_user_ids, list)
+            or not raw_user_ids
+            or len(raw_user_ids) > self._maximum_members
+        ):
+            raise DRFValidationError({"user_ids": "Provide between 1 and 200 opaque user IDs."})
+        try:
+            requested_user_ids = [int(value) for value in raw_user_ids]
+        except (TypeError, ValueError):
+            raise DRFValidationError({"user_ids": "User IDs must be positive integers."})
+        if any(value <= 0 for value in requested_user_ids) or len(set(requested_user_ids)) != len(requested_user_ids):
+            raise DRFValidationError({"user_ids": "User IDs must be unique positive integers."})
+
+        profile = CompanyProfile.objects.filter(pk=profile_id).first()
+        if profile is None:
+            return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        active_member_user_ids = list(
+            User.objects.filter(pk__in=requested_user_ids, is_active=True)
+            .filter(
+                Q(pk=profile.owner_id)
+                | Q(company_memberships__profile_id=profile_id, company_memberships__is_active=True)
+            )
+            .order_by("pk")
+            .values_list("pk", flat=True)
+            .distinct()
+        )
+        response = Response(
+            {
+                "profile_id": profile_id,
+                "active_member_user_ids": [str(user_id) for user_id in active_member_user_ids],
             }
         )
         response["Cache-Control"] = "no-store"

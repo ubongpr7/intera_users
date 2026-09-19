@@ -42,7 +42,7 @@ JWT_PUBLIC_KEY_PATH=/absolute/path/jwt_public.pem
 
 ## Hosperator Notification Bridge
 
-`intera_users` remains the authority for staff groups, roles, permissions, and profile membership. Hosperator Notification may read an active group's current members only through this internal endpoint:
+`intera_users` remains the authority for staff groups, roles, permissions, and profile membership. Hosperator Notification and Hosperator Core may read an active group's current members only through this internal endpoint:
 
 ```text
 GET /management/internal/profiles/{profile_id}/groups/{group_id}/members/
@@ -56,10 +56,14 @@ Deploy the paired settings together:
 ```env
 # intera_users
 HOSPERATOR_NOTIFICATION_SERVICE_TOKEN=<high-entropy-shared-secret>
+HOSPERATOR_CORE_GROUP_MEMBERS_SERVICE_TOKEN=<different-high-entropy-shared-secret>
 
 # hosperator-notification
 INTERA_USERS_GROUP_MEMBERS_URL_TEMPLATE=https://users.example/management/internal/profiles/{profile_id}/groups/{group_id}/members/
 INTERA_USERS_SERVICE_BEARER_TOKEN=<same-high-entropy-shared-secret>
+
+# hosperator-core: only for explicit SOP group acknowledgement assignment
+HOSPERATOR_CORE_GROUP_MEMBERS_SERVICE_TOKEN=<same-different-high-entropy-shared-secret>
 ```
 
 The canonical response contract is maintained in Hosperator at `contracts/apis/intera_users.group_members.v1.schema.json`.

@@ -39,6 +39,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
                     "hosperator.diagnostic.",
                     "hosperator.inpatient.",
                     "hosperator.queue.",
+                    "hosperator.sop.",
                 ),
             ),
             StaffAccessPreset(
@@ -53,6 +54,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
                     "hosperator.queue.read",
                     "hosperator.queue.write",
                     "hosperator.queue.complete",
+                    "hosperator.sop.read",
                 ),
             ),
             StaffAccessPreset(
@@ -75,6 +77,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
                     "hosperator.clinical.finding.write",
                     "hosperator.clinical.note.read",
                     "hosperator.clinical.note.write",
+                    "hosperator.clinical.reference.read",
                     "hosperator.clinical.vital.read",
                     "hosperator.clinical.vital.write",
                     "hosperator.inpatient.read",
@@ -82,6 +85,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
                     "hosperator.queue.read",
                     "hosperator.queue.write",
                     "hosperator.queue.complete",
+                    "hosperator.sop.read",
                 ),
             ),
             StaffAccessPreset(
@@ -93,6 +97,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
                     "hosperator.encounter.read",
                     "hosperator.order.read",
                     "hosperator.reporting.read",
+                    "hosperator.sop.read",
                 ),
                 permission_prefixes=("hosperator.diagnostic.",),
             ),
@@ -117,7 +122,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
             StaffAccessPreset(
                 name="Hosperator Viewer",
                 description="Read-only access to Hosperator records and operational reports",
-                permissions=("hosperator.organization.read", "hosperator.reporting.read"),
+                permissions=("hosperator.organization.read", "hosperator.reporting.read", "hosperator.sop.read"),
                 permission_prefixes=(
                     "hosperator.patient.",
                     "hosperator.appointment.read",

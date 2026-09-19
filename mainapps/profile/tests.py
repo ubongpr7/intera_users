@@ -538,6 +538,11 @@ class CompanyMembershipSignalTests(TestCase):
 class SupportAccessGrantTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.subscription_limit_patch = patch(
+            "subapps.services.subscription_entitlements.enforce_subscription_limit"
+        )
+        self.subscription_limit_patch.start()
+        self.addCleanup(self.subscription_limit_patch.stop)
         self.owner = User.objects.create_user(
             email="owner-support@example.com",
             password="password123",
@@ -642,10 +647,17 @@ class SupportAccessGrantTests(TestCase):
 
     @patch("mainapps.profile.views.send_html_email")
     def test_admin_with_support_access_permission_can_create_request(self, send_html_email_mock):
-        self._force_profile_auth(
-            self.admin_user,
-            permissions=[CombinedPermissions.CREATE_SUPPORT_ACCESS_GRANT],
+        category, _ = PermissionCategory.objects.get_or_create(
+            name="Support access",
+            defaults={"service": "users"},
         )
+        permission, _ = CustomUserPermission.objects.get_or_create(
+            codename=CombinedPermissions.CREATE_SUPPORT_ACCESS_GRANT,
+            platform=PlatformChoices.INTERA_IMS,
+            defaults={"category": category},
+        )
+        self.admin_user.custom_permissions.add(permission)
+        self._force_profile_auth(self.admin_user)
 
         response = self.client.post(
             "/management/support-access-grants/",
@@ -753,7 +765,7 @@ class SupportAccessGrantTests(TestCase):
         self.assertEqual(access_claims["support_access_grant_id"], str(grant.id))
         self.assertEqual(access_claims["support_access_mode"], "support_inventory_ops")
         self.assertEqual(access_claims["support_actor_type"], "support")
-        self.assertIn(CombinedPermissions.ADJUST_STOCK_ITEM_QUANTITY, access_claims["support_access_scope"])
+        self.assertNotIn("support_access_scope", access_claims)
         grant.refresh_from_db()
         self.assertIsNotNone(grant.last_used_at)
         publish_workspace_entered_mock.assert_called_once()
@@ -961,6 +973,7 @@ class SupportAccessGrantTests(TestCase):
 
 class InternalHosperatorGroupMembersTests(TestCase):
     service_token = "notification-service-test-token"
+    core_service_token = "core-group-members-service-test-token"
 
     def setUp(self):
         self.client = APIClient()
@@ -1020,6 +1033,17 @@ class InternalHosperatorGroupMembersTests(TestCase):
         self.assertEqual(self._get(token="wrong-token").status_code, HTTPStatus.FORBIDDEN)
         self.assertEqual(self._get(token=self.service_token).status_code, HTTPStatus.OK)
 
+    @patch.dict(
+        os.environ,
+        {"HOSPERATOR_CORE_GROUP_MEMBERS_SERVICE_TOKEN": core_service_token},
+        clear=False,
+    )
+    def test_accepts_the_separate_core_group_members_service_token(self):
+        response = self._get(token=self.core_service_token)
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        self.assertEqual(response.json()["member_user_ids"], [str(self.owner.id), str(self.active_member.id)])
+
     @patch.dict(os.environ, {"HOSPERATOR_NOTIFICATION_SERVICE_TOKEN": service_token})
     def test_hides_cross_profile_or_inactive_group_as_not_found(self):
         other_profile = CompanyProfile.objects.create(owner=self.owner, name="Other Hospital")
@@ -1057,3 +1081,57 @@ class InternalHosperatorGroupMembersTests(TestCase):
 
         self.assertEqual(response.status_code, HTTPStatus.CONFLICT)
         self.assertEqual(response.json(), {"detail": "Group exceeds the operational notification membership limit."})
+
+
+class InternalHosperatorProfileMembersTests(TestCase):
+    service_key = "core-service-test-key"
+
+    def setUp(self):
+        self.client = APIClient()
+        self.owner = User.objects.create_user(email="membership-owner@example.com", password="password123")
+        self.profile = CompanyProfile.objects.create(owner=self.owner, name="SOP Assignment Hospital")
+        self.active_member = User.objects.create_user(email="membership-active@example.com", password="password123")
+        self.inactive_member = User.objects.create_user(email="membership-inactive@example.com", password="password123")
+        self.outsider = User.objects.create_user(email="membership-outsider@example.com", password="password123")
+        CompanyMembership.objects.create(
+            user=self.active_member,
+            profile=self.profile,
+            role=CompanyMembership.MembershipRole.MEMBER,
+            is_active=True,
+            invited_by=self.owner,
+        )
+        CompanyMembership.objects.create(
+            user=self.inactive_member,
+            profile=self.profile,
+            role=CompanyMembership.MembershipRole.MEMBER,
+            is_active=False,
+            invited_by=self.owner,
+        )
+        self.path = f"/management/internal/profiles/{self.profile.id}/members/"
+
+    def _post(self, user_ids, key=None):
+        headers = {"HTTP_X_INTERA_SERVICE_KEY": key} if key is not None else {}
+        return self.client.post(self.path, {"user_ids": user_ids}, format="json", **headers)
+
+    @override_settings(PERMISSION_EVALUATION_SERVICE_KEY=service_key)
+    def test_returns_only_requested_active_workspace_members(self):
+        response = self._post(
+            [str(self.owner.id), str(self.active_member.id), str(self.inactive_member.id), str(self.outsider.id)],
+            key=self.service_key,
+        )
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertEqual(
+            response.json(),
+            {
+                "profile_id": self.profile.id,
+                "active_member_user_ids": [str(self.owner.id), str(self.active_member.id)],
+            },
+        )
+
+    @override_settings(PERMISSION_EVALUATION_SERVICE_KEY=service_key)
+    def test_rejects_missing_key_and_malformed_or_unbounded_requests(self):
+        self.assertEqual(self._post([str(self.owner.id)]).status_code, HTTPStatus.FORBIDDEN)
+        self.assertEqual(self._post(["not-an-id"], key=self.service_key).status_code, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(self._post([str(self.owner.id)] * 201, key=self.service_key).status_code, HTTPStatus.BAD_REQUEST)

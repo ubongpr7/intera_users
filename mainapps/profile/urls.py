@@ -14,6 +14,7 @@ from .views import (
     CompanyProfileAddressViewSet,
     SupportAccessGrantViewSet,
     InternalHosperatorGroupMembersView,
+    InternalHosperatorProfileMembersView,
     InternalSubscriptionUsageView,
 )
 
@@ -39,6 +40,11 @@ urlpatterns = [
         'internal/profiles/<int:profile_id>/groups/<int:group_id>/members/',
         InternalHosperatorGroupMembersView.as_view(),
         name='internal-hosperator-group-members',
+    ),
+    path(
+        'internal/profiles/<int:profile_id>/members/',
+        InternalHosperatorProfileMembersView.as_view(),
+        name='internal-hosperator-profile-members',
     ),
     path('internal/subscription-usage/', InternalSubscriptionUsageView.as_view(), name='internal-subscription-usage'),
     path('', include(router.urls)),

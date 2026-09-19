@@ -1,6 +1,6 @@
 from django.test import SimpleTestCase
 
-from .authorization_context import access_context_hash, has_context_permission, issue_websocket_ticket
+from .authorization_context import access_context_hash, issue_websocket_ticket
 
 
 class AuthorizationContextTests(SimpleTestCase):
@@ -31,20 +31,19 @@ class AuthorizationContextTests(SimpleTestCase):
         payload = jwt.decode(ticket, verifying_key, algorithms=[algorithm], options={"verify_aud": False})
         self.assertEqual(payload["platform"], "hosperator")
 
-    def test_wildcard_permission_mapping_grants_only_mapped_permission(self):
+    def test_websocket_ticket_omits_legacy_permission_claims(self):
+        import jwt
+        from django.conf import settings
+
         payload = {
             "wildcards": ["system:cashier"],
             "wildcard_permissions": {"system:cashier": ["read_pos", "operate_pos"]},
-            "permissions": [],
+            "permissions": ["read_pos"],
         }
-        self.assertTrue(has_context_permission(payload, "operate_pos"))
-        self.assertFalse(has_context_permission(payload, "manage_pos_settings"))
-
-    def test_scoped_wildcard_permission_matches_platform_permission(self):
-        payload = {
-            "wildcards": ["system:workspace-owner"],
-            "wildcard_permissions": {"system:workspace-owner": ["hosperator.*"]},
-            "permissions": [],
-        }
-        self.assertTrue(has_context_permission(payload, "hosperator.patient.read"))
-        self.assertFalse(has_context_permission(payload, "read_inventory"))
+        ticket = issue_websocket_ticket(payload)
+        algorithm = settings.SIMPLE_JWT["ALGORITHM"]
+        verifying_key = settings.SIMPLE_JWT.get("VERIFYING_KEY") or settings.SECRET_KEY
+        decoded = jwt.decode(ticket, verifying_key, algorithms=[algorithm], options={"verify_aud": False})
+        self.assertNotIn("permissions", decoded)
+        self.assertNotIn("wildcards", decoded)
+        self.assertNotIn("wildcard_permissions", decoded)
