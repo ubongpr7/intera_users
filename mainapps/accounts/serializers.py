@@ -183,7 +183,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def _profile_payload(cls, profile, user, support_grant=None):
         if not profile:
             return None
-        subscription_metadata = cls._subscription_metadata(profile)
         if support_grant is not None:
             role = support_grant.membership_role
             membership_id = None
@@ -213,8 +212,6 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             "support_access_expires_at": support_grant.expires_at.isoformat() if support_grant else None,
             "support_access_mode": support_grant.permission_mode if support_grant else None,
             "support_actor_type": "support" if support_grant else "workspace_member",
-            "subscription_snapshot": cls._subscription_snapshot(profile),
-            "subscription": subscription_metadata,
         }
 
     @classmethod
