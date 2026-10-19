@@ -154,6 +154,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
                 CombinedPermissions.DELETE_AGENT,
                 CombinedPermissions.MANAGE_AGENT_SETTINGS,
                 CombinedPermissions.INTERACT_WITH_AGENT,
+                CombinedPermissions.ORAL_CONVERSATION_WITH_AI,
                 CombinedPermissions.VIEW_AGENT_ACTIVITY,
                 CombinedPermissions.READ_POS,
                 CombinedPermissions.OPERATE_POS,
@@ -210,6 +211,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
             permissions=(
                 CombinedPermissions.READ_AGENT,
                 CombinedPermissions.INTERACT_WITH_AGENT,
+                CombinedPermissions.ORAL_CONVERSATION_WITH_AI,
                 CombinedPermissions.VIEW_AGENT_ACTIVITY,
                 CombinedPermissions.CREATE_INVENTORY,
                 CombinedPermissions.READ_INVENTORY,
@@ -240,6 +242,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
             permissions=(
                 CombinedPermissions.READ_AGENT,
                 CombinedPermissions.INTERACT_WITH_AGENT,
+                CombinedPermissions.ORAL_CONVERSATION_WITH_AI,
                 CombinedPermissions.VIEW_AGENT_ACTIVITY,
                 CombinedPermissions.CREATE_INVENTORY,
                 CombinedPermissions.READ_INVENTORY,
@@ -259,6 +262,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
             permissions=(
                 CombinedPermissions.READ_AGENT,
                 CombinedPermissions.INTERACT_WITH_AGENT,
+                CombinedPermissions.ORAL_CONVERSATION_WITH_AI,
                 CombinedPermissions.VIEW_AGENT_ACTIVITY,
                 CombinedPermissions.CREATE_PURCHASE_ORDER,
                 CombinedPermissions.READ_PURCHASE_ORDER,
@@ -278,6 +282,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
             permissions=(
                 CombinedPermissions.READ_AGENT,
                 CombinedPermissions.INTERACT_WITH_AGENT,
+                CombinedPermissions.ORAL_CONVERSATION_WITH_AI,
                 CombinedPermissions.READ_INVENTORY,
                 CombinedPermissions.READ_STOCK_ITEM,
                 CombinedPermissions.UPDATE_STOCK_ITEM,
@@ -292,6 +297,7 @@ def get_default_staff_access_presets(platform=PlatformChoices.INTERA_IMS) -> lis
             permissions=(
                 CombinedPermissions.READ_AGENT,
                 CombinedPermissions.INTERACT_WITH_AGENT,
+                CombinedPermissions.ORAL_CONVERSATION_WITH_AI,
                 CombinedPermissions.VIEW_AGENT_ACTIVITY,
                 CombinedPermissions.READ_INVENTORY,
                 CombinedPermissions.READ_STOCK_ITEM,

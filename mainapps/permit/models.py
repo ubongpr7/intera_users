@@ -80,6 +80,7 @@ class CombinedPermissions(models.TextChoices):
     DELETE_AGENT = 'delete_agent', _('Can delete agent')
     MANAGE_AGENT_SETTINGS = 'manage_agent_settings', _('Can manage agent settings')
     INTERACT_WITH_AGENT = 'interact_with_agent', _('Can interact with agent')
+    ORAL_CONVERSATION_WITH_AI = 'oral_conversation_with_ai', _('Can use voice conversation with AI')
     VIEW_AGENT_ACTIVITY = 'view_agent_activity', _('Can view agent activity')
 
     # Inventory Permissions
