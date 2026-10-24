@@ -60,6 +60,8 @@ def _serialize_company_profile(profile: CompanyProfile) -> dict[str, Any]:
         "company_code": profile.company_code,
         "display_name": display_name,
         "logo_url": profile.logo.url if getattr(profile, "logo", None) else "",
+        "logo_light_url": profile.logo_light.url if getattr(profile, "logo_light", None) else "",
+        "logo_dark_url": profile.logo_dark.url if getattr(profile, "logo_dark", None) else "",
         # Keep the legacy snapshot during the compatibility window. Consumers should
         # use the opaque shared ID for address resolution going forward.
         "headquarters_address_id": str(headquarters_address.shared_address_id) if headquarters_address and headquarters_address.shared_address_id else None,

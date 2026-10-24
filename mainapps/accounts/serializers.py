@@ -233,6 +233,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             "name": profile.name,
             "company_code": profile.company_code,
             "logo": profile.logo.url if getattr(profile, "logo", None) else None,
+            "logo_light": profile.logo_light.url if getattr(profile, "logo_light", None) else None,
+            "logo_dark": profile.logo_dark.url if getattr(profile, "logo_dark", None) else None,
             "industry": profile.industry,
             "owner_id": str(profile.owner_id) if profile.owner_id else None,
             "currency": profile.currency,

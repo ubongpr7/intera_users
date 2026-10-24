@@ -107,6 +107,20 @@ class CompanyProfile(models.Model):
         null=True,
         verbose_name=_('Company logo'),
     )
+    logo_light = models.ImageField(
+        upload_to='company_logos/light/%y/%m/%d/',
+        blank=True,
+        null=True,
+        verbose_name=_('Light mode company logo'),
+        help_text=_('Logo intended for light application surfaces.'),
+    )
+    logo_dark = models.ImageField(
+        upload_to='company_logos/dark/%y/%m/%d/',
+        blank=True,
+        null=True,
+        verbose_name=_('Dark mode company logo'),
+        help_text=_('Logo intended for dark application surfaces.'),
+    )
     
     industry = models.CharField(
         max_length=50,
