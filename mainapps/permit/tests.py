@@ -6,7 +6,9 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
 from mainapps.accounts.models import User
+from mainapps.accounts.serializers import MyTokenObtainPairSerializer
 from mainapps.permit.models import CustomUserPermission, PermissionCategory, PlatformChoices
+from mainapps.accounts.authorization_context import evaluate_permission_grants
 from mainapps.profile.models import CompanyProfile
 from mainapps.profile.models import CompanyMembership, StaffGroup, StaffRole, StaffRoleAssignment
 from mainapps.permit.api.views import RoleAccessViewSet, UserAccessViewSet, _user_has_profile_access
@@ -58,6 +60,65 @@ class PermissionClaimBoundaryTests(SimpleTestCase):
             platform=PlatformChoices.INTERA_IMS,
             permissions=["manage_company_settings"],
         )
+
+
+class WorkspaceAdminEvaluationTests(TestCase):
+    def test_ims_workspace_owner_retains_implicit_workspace_permissions(self):
+        owner = User.objects.create_user(
+            email="ims-owner@example.com",
+            password="password123",
+        )
+        profile = CompanyProfile.objects.create(owner=owner, name="IMS Workspace")
+        category = PermissionCategory.objects.create(
+            platform=PlatformChoices.INTERA_IMS,
+            name="Inventory",
+        )
+        CustomUserPermission.objects.create(
+            platform=PlatformChoices.INTERA_IMS,
+            codename="read_stock_item",
+            category=category,
+        )
+        CustomUserPermission.objects.create(
+            platform=PlatformChoices.INTERA_IMS,
+            codename="read_purchase_order",
+            category=category,
+        )
+
+        grants = evaluate_permission_grants(
+            owner,
+            profile=profile,
+            platform=PlatformChoices.INTERA_IMS,
+            permissions=["read_stock_item", "read_purchase_order"],
+        )
+
+        self.assertEqual(
+            grants,
+            {"read_stock_item": True, "read_purchase_order": True},
+        )
+
+    def test_effective_permission_payload_includes_owner_catalog(self):
+        owner = User.objects.create_user(
+            email="ims-owner-effective@example.com",
+            password="password123",
+        )
+        profile = CompanyProfile.objects.create(owner=owner, name="IMS Workspace")
+        category = PermissionCategory.objects.create(
+            platform=PlatformChoices.INTERA_IMS,
+            name="Inventory",
+        )
+        CustomUserPermission.objects.create(
+            platform=PlatformChoices.INTERA_IMS,
+            codename="read_stock_item",
+            category=category,
+        )
+
+        permissions = MyTokenObtainPairSerializer.get_all_permissions(
+            owner,
+            profile=profile,
+            platform=PlatformChoices.INTERA_IMS,
+        )
+
+        self.assertIn("read_stock_item", permissions)
 
 
 class AccessControlProducerTests(TestCase):
@@ -268,6 +329,85 @@ class PermitApiViewTests(TestCase):
         self.assertEqual(response.data["platform"], PlatformChoices.INTERA_IMS)
         self.assertFalse(response.data["is_owner"])
         self.assertIn("view_audit_trail", response.data["permissions"])
+
+    @override_settings(PERMISSION_EVALUATION_SERVICE_KEY="test-permission-evaluator")
+    def test_hosperator_admin_membership_returns_full_product_permissions(self):
+        category, _ = PermissionCategory.objects.get_or_create(
+            platform=PlatformChoices.HOSPERATOR,
+            name="Hosperator Administration",
+            defaults={"service": "users"},
+        )
+        permission, _ = CustomUserPermission.objects.get_or_create(
+            codename="hosperator.patient.write",
+            platform=PlatformChoices.HOSPERATOR,
+            defaults={"category": category},
+        )
+        CompanyMembership.objects.filter(
+            user=self.member,
+            profile=self.active_profile,
+        ).update(role=CompanyMembership.MembershipRole.ADMIN)
+        self.client.force_authenticate(
+            user=self.member,
+            token=SimpleNamespace(
+                payload={
+                    "profile_id": str(self.active_profile.id),
+                    "platform": PlatformChoices.HOSPERATOR,
+                }
+            ),
+        )
+
+        response = self.client.get(
+            "/permission_api/me/effective-permissions/",
+            {"platform": PlatformChoices.HOSPERATOR},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["is_owner"])
+        self.assertIn(permission.codename, response.data["permissions"])
+
+        grant_response = self.client.post(
+            "/permission_api/internal/evaluate-permissions/",
+            {
+                "user_id": str(self.member.id),
+                "profile_id": str(self.active_profile.id),
+                "platform": PlatformChoices.HOSPERATOR,
+                "permissions": [permission.codename],
+            },
+            format="json",
+            HTTP_X_INTERA_SERVICE_KEY="test-permission-evaluator",
+        )
+        self.assertEqual(grant_response.status_code, 200)
+        self.assertTrue(grant_response.data["grants"][permission.codename])
+
+    def test_hosperator_owner_permissions_are_explicit_in_effective_snapshot(self):
+        category, _ = PermissionCategory.objects.get_or_create(
+            platform=PlatformChoices.HOSPERATOR,
+            name="Hosperator Owner",
+            defaults={"service": "users"},
+        )
+        permission, _ = CustomUserPermission.objects.get_or_create(
+            codename="hosperator.organization.manage",
+            platform=PlatformChoices.HOSPERATOR,
+            defaults={"category": category},
+        )
+        self.client.force_authenticate(
+            user=self.owner,
+            token=SimpleNamespace(
+                payload={
+                    "profile_id": str(self.active_profile.id),
+                    "platform": PlatformChoices.HOSPERATOR,
+                }
+            ),
+        )
+
+        response = self.client.get(
+            "/permission_api/me/effective-permissions/",
+            {"platform": PlatformChoices.HOSPERATOR},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_owner"])
+        self.assertIn(permission.codename, response.data["permissions"])
 
     def test_effective_permissions_requires_active_profile(self):
         self.client.force_authenticate(

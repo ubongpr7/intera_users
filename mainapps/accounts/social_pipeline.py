@@ -2,6 +2,7 @@
 
 from django.contrib.auth import get_user_model
 from social_core.exceptions import AuthException, AuthForbidden
+from social_core.pipeline.user import user_details
 
 
 def associate_verified_google_by_email(
@@ -35,3 +36,30 @@ def associate_verified_google_by_email(
     if users:
         return {"user": users[0], "is_new": False}
     return None
+
+
+def preserve_existing_user_details(
+    strategy,
+    details,
+    backend,
+    user=None,
+    is_new=False,
+    *args,
+    **kwargs,
+):
+    """Keep existing account names when a verified social identity is linked.
+
+    New social accounts still receive provider details. Existing accounts keep
+    the name already entered in Intera IMS instead of being overwritten by the
+    provider's profile name.
+    """
+    if user is not None and not is_new:
+        return {"user": user}
+    return user_details(
+        strategy,
+        details,
+        backend=backend,
+        user=user,
+        *args,
+        **kwargs,
+    )

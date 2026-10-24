@@ -1,4 +1,6 @@
 import base64
+import secrets
+from datetime import timedelta
 from io import BytesIO
 
 import pyotp
@@ -6,7 +8,7 @@ import qrcode
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from django.db.models import Q
@@ -15,10 +17,12 @@ from decimal import Decimal
 from urllib.parse import quote
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 from subapps.email_system.emails import send_html_email
 from subapps.utils.request_context import build_frontend_url, get_request_profile_id
 from mainapps.permit.permit import HasModelRequestPermission
-from .models import ReferralPayout, User, VerificationCode
+from .models import AffiliatePartner, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
 from .legal import (
     PRIVACY_POLICY_VERSION,
     TERMS_POLICY_VERSION,
@@ -26,8 +30,13 @@ from .legal import (
 )
 from djoser.social.views import ProviderAuthView
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 from mainapps.common.settings import get_company_or_profile
-from mainapps.profile.models import CompanyProfile, SupportAccessGrant
+from mainapps.profile.models import CompanyMembership, CompanyProfile, SupportAccessGrant
 from mainapps.permit.models import PlatformChoices
 from subapps.kafka.producers import (
     build_actor,
@@ -36,7 +45,13 @@ from subapps.kafka.producers import (
 )
 
 from .serializers import SocialJWTSerializer
-from .authorization_context import authorization_context_from_request, issue_authorization_context, issue_websocket_ticket
+from .authorization_context import (
+    authorization_context_from_request,
+    issue_authorization_context,
+    issue_websocket_ticket,
+    public_signing_jwks,
+    websocket_ticket_lifetime_seconds,
+)
 from django.conf import settings
 from .serializers import (
     MyUserSerializer,
@@ -47,6 +62,8 @@ from .serializers import (
     MyTokenObtainPairSerializer,
     OwnerRegistrationSerializer,
     CompanyContextSwitchSerializer,
+    AffiliatePartnerSerializer,
+    ReferralPayoutSerializer,
 )
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -58,9 +75,63 @@ from rest_framework_simplejwt.views import (
 class WebSocketTicketView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description=(
+            "Issue a short-lived WebSocket ticket bound to the bearer token and "
+            "X-Intera-Authorization-Context pair."
+        ),
+        responses={
+            status.HTTP_201_CREATED: openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                required=["ws_ticket", "expires_in"],
+                properties={
+                    "ws_ticket": openapi.Schema(type=openapi.TYPE_STRING),
+                    "expires_in": openapi.Schema(type=openapi.TYPE_INTEGER, minimum=1),
+                    "ticket": openapi.Schema(
+                        type=openapi.TYPE_STRING,
+                        description="Deprecated compatibility alias for ws_ticket.",
+                    ),
+                },
+            )
+        },
+    )
     def post(self, request):
         context = authorization_context_from_request(request)
-        return Response({"ticket": issue_websocket_ticket(context)}, status=status.HTTP_201_CREATED)
+        ticket = issue_websocket_ticket(context)
+        return Response(
+            {
+                "ws_ticket": ticket,
+                "expires_in": websocket_ticket_lifetime_seconds(),
+                "ticket": ticket,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class PublicSigningKeysView(APIView):
+    """Publish the current RSA verification key for device-proof validation."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_description=(
+            "Return the public JSON Web Key used to verify authorization contexts, "
+            "WebSocket tickets, and short-lived device-enrolment proofs."
+        ),
+        responses={200: openapi.Schema(type=openapi.TYPE_OBJECT)},
+    )
+    def get(self, _request):
+        try:
+            payload = public_signing_jwks()
+        except RuntimeError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        response = Response(payload)
+        response["Cache-Control"] = "public, max-age=300"
+        return response
 
 
 def _set_session_cookies(response, access_token=None, refresh_token=None):
@@ -73,6 +144,7 @@ def _set_session_cookies(response, access_token=None, refresh_token=None):
             secure=settings.AUTH_COOKIE_SECURE,
             httponly=settings.AUTH_COOKIE_HTTP_ONLY,
             samesite=settings.AUTH_COOKIE_SAMESITE,
+            domain=settings.AUTH_COOKIE_DOMAIN,
         )
     if refresh_token:
         response.set_cookie(
@@ -83,12 +155,13 @@ def _set_session_cookies(response, access_token=None, refresh_token=None):
             secure=settings.AUTH_COOKIE_SECURE,
             httponly=settings.AUTH_COOKIE_HTTP_ONLY,
             samesite=settings.AUTH_COOKIE_SAMESITE,
+            domain=settings.AUTH_COOKIE_DOMAIN,
         )
 
 
 def _clear_session_cookies(response):
-    response.delete_cookie(settings.AUTH_COOKIE, path=settings.AUTH_COOKIE_PATH)
-    response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path=settings.AUTH_COOKIE_PATH)
+    response.delete_cookie(settings.AUTH_COOKIE, path=settings.AUTH_COOKIE_PATH, domain=settings.AUTH_COOKIE_DOMAIN)
+    response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path=settings.AUTH_COOKIE_PATH, domain=settings.AUTH_COOKIE_DOMAIN)
 
 
 def _build_auth_payload(
@@ -108,6 +181,7 @@ def _build_auth_payload(
             profile=profile,
             support_grant=support_grant,
             platform=platform,
+            access_token_id=access.get("jti"),
         ),
         "id": user.id,
         "username": user.username,
@@ -247,6 +321,8 @@ class UserViewSet(viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_permissions(self):
+        if getattr(self, "action", None) in {"admin_me", "admin_summary"}:
+            return [IsAdminUser()]
         if getattr(self, "action", None) in self.PERSONAL_ACTIONS:
             return [IsAuthenticated()]
         if getattr(self, "action", None) in self.ADMIN_ACTIONS:
@@ -294,6 +370,42 @@ class UserViewSet(viewsets.ModelViewSet):
         """Return the authenticated user's personal profile."""
         return Response(MyUserSerializer(request.user).data)
 
+    @action(detail=False, methods=['get'], url_path='admin-me')
+    def admin_me(self, request):
+        """Return the minimal identity used by the isolated staff portal."""
+        user = request.user
+        return Response({
+            'id': user.id,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'is_staff': bool(user.is_staff),
+            'is_superuser': bool(user.is_superuser),
+        })
+
+    @action(detail=False, methods=['get'], url_path='admin-summary')
+    def admin_summary(self, request):
+        """Return platform-level identity and workspace counts for staff insight dashboards."""
+        users = User.objects.all()
+        profiles = CompanyProfile.objects.all()
+        memberships = CompanyMembership.objects.all()
+        return Response({
+            'generated_at': timezone.now().isoformat(),
+            'users': {
+                'total': users.count(),
+                'active': users.filter(is_active=True).count(),
+                'staff': users.filter(is_staff=True, is_active=True).count(),
+                'superusers': users.filter(is_superuser=True, is_active=True).count(),
+            },
+            'workspaces': {
+                'total': profiles.count(),
+                'verified': profiles.filter(is_verified=True).count(),
+            },
+            'memberships': {
+                'active': memberships.filter(is_active=True).count(),
+            },
+        })
+
     @me.mapping.patch
     def partial_update_me(self, request):
         serializer = UserUpdateSerializer(request.user, data=request.data, partial=True)
@@ -317,7 +429,7 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response({
             'referral_code': user.referral_code,
             'referral_url': referral_url,
-            'commission_rate': '0.05',
+            'commission_rate': str(user.referral_commission_rate),
             'referred_count': user.referred_users.count(),
             'referred_users': [
                 {
@@ -348,27 +460,21 @@ class UserViewSet(viewsets.ModelViewSet):
                 for payout in payouts[:100]
             ],
         })
-    
-    
+
     @action(detail=False, methods=['get'])
     def search(self, request):
-        """Search users"""
         query = request.query_params.get('q', '')
-        if query:
-            queryset = self.get_queryset().filter(
-                Q(first_name__icontains=query) |
-                Q(last_name__icontains=query) |
-                Q(email__icontains=query)
-            ).filter(is_active=True)
-            
-            page = self.paginate_queryset(queryset)
-            if page is not None:
-                serializer = self.get_serializer(page, many=True)
-                return self.get_paginated_response(serializer.data)
-            
-            serializer = self.get_serializer(queryset, many=True)
-            return Response(serializer.data)
-        return Response([])
+        if not query:
+            return Response([])
+        queryset = self.get_queryset().filter(
+            Q(first_name__icontains=query) |
+            Q(last_name__icontains=query) |
+            Q(email__icontains=query)
+        ).filter(is_active=True)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            return self.get_paginated_response(self.get_serializer(page, many=True).data)
+        return Response(self.get_serializer(queryset, many=True).data)
 
     @action(detail=False, methods=['post'], url_path='create-staff')
     def create_staff(self, request):
@@ -378,6 +484,176 @@ class UserViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_405_METHOD_NOT_ALLOWED,
         )
+
+
+class PlatformStaffInvitationView(APIView):
+    """Platform-level staff invitations; deliberately independent of workspaces."""
+    permission_classes = [IsAdminUser]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not request.user.is_superuser:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only a superuser can manage platform staff invitations.")
+
+    def get(self, request):
+        invitations = PlatformStaffInvitation.objects.select_related("invited_by", "accepted_user").all()[:100]
+        return Response([self._serialize(item) for item in invitations])
+
+    def post(self, request):
+        email = PlatformStaffInvitation.normalize_email(request.data.get("email"))
+        try:
+            validate_email(email)
+        except DjangoValidationError:
+            return Response({"detail": "A valid email address is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if User.objects.filter(email__iexact=email, is_staff=True).exists():
+            return Response({"detail": "This user is already platform staff."}, status=status.HTTP_409_CONFLICT)
+        pending = PlatformStaffInvitation.objects.filter(email__iexact=email, status=PlatformStaffInvitation.Status.PENDING).first()
+        if pending and pending.expires_at > timezone.now():
+            return Response({"detail": "A pending invitation already exists for this email."}, status=status.HTTP_409_CONFLICT)
+        if pending:
+            pending.status = PlatformStaffInvitation.Status.EXPIRED
+            pending.save(update_fields=["status"])
+        raw_token = secrets.token_urlsafe(32)
+        invitation = PlatformStaffInvitation.objects.create(
+            email=email,
+            token_hash=PlatformStaffInvitation.hash_token(raw_token),
+            invited_by=request.user,
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+        accept_url = self._frontend_url(request, raw_token)
+        send_html_email(
+            subject="You have been invited to Intera IMS administration",
+            message=f"You have been invited to become an Intera IMS staff administrator. Accept the invitation: {accept_url}",
+            to_email=[email],
+            html_file="emails/platform_staff_invitation.html",
+            from_email=getattr(settings, "EMAIL_ACCOUNTS_FROM_EMAIL", settings.DEFAULT_FROM_EMAIL),
+            context={"accept_url": accept_url, "expires_at": invitation.expires_at, "recipient_email": email, "invited_by_email": request.user.email},
+        )
+        return Response(self._serialize(invitation), status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _frontend_url(request, token):
+        base = (getattr(settings, "ADMIN_FRONTEND_SITE_URL", "") or "").rstrip("/")
+        if not base:
+            base = build_frontend_url(request, "/").rstrip("/")
+        return f"{base}/accounts/admin-invite/{quote(token, safe='')}"
+
+    @staticmethod
+    def _serialize(invitation):
+        return {
+            "id": str(invitation.id),
+            "email": invitation.email,
+            "status": invitation.status,
+            "expires_at": invitation.expires_at.isoformat(),
+            "created_at": invitation.created_at.isoformat(),
+            "accepted_at": invitation.accepted_at.isoformat() if invitation.accepted_at else None,
+        }
+
+
+class PlatformStaffInvitationRevokeView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if not request.user.is_superuser:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Only a superuser can manage platform staff invitations.")
+
+    def post(self, request, invitation_id):
+        invitation = PlatformStaffInvitation.objects.filter(pk=invitation_id).first()
+        if not invitation:
+            return Response({"detail": "Invitation not found."}, status=status.HTTP_404_NOT_FOUND)
+        if invitation.status == PlatformStaffInvitation.Status.PENDING:
+            invitation.status = PlatformStaffInvitation.Status.REVOKED
+            invitation.save(update_fields=["status"])
+        return Response(PlatformStaffInvitationView._serialize(invitation))
+
+
+class PlatformStaffInvitationLookupView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = str(request.query_params.get("token") or "")
+        invitation = PlatformStaffInvitation.objects.filter(token_hash=PlatformStaffInvitation.hash_token(token)).first()
+        if not invitation or invitation.status != PlatformStaffInvitation.Status.PENDING:
+            return Response({"detail": "Invitation is invalid or no longer available."}, status=status.HTTP_404_NOT_FOUND)
+        if invitation.expires_at <= timezone.now():
+            invitation.status = PlatformStaffInvitation.Status.EXPIRED
+            invitation.save(update_fields=["status"])
+            return Response({"detail": "Invitation has expired."}, status=status.HTTP_410_GONE)
+        return Response({"email": invitation.email, "expires_at": invitation.expires_at.isoformat()})
+
+
+class PlatformStaffInvitationAcceptView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = str(request.data.get("token") or "")
+        first_name = str(request.data.get("first_name") or "").strip()
+        last_name = str(request.data.get("last_name") or "").strip()
+        password = request.data.get("password")
+        with transaction.atomic():
+            invitation = PlatformStaffInvitation.objects.select_for_update().filter(token_hash=PlatformStaffInvitation.hash_token(token)).first()
+            if not invitation or invitation.status != PlatformStaffInvitation.Status.PENDING:
+                return Response({"detail": "Invitation is invalid or no longer available."}, status=status.HTTP_400_BAD_REQUEST)
+            if invitation.expires_at <= timezone.now():
+                invitation.status = PlatformStaffInvitation.Status.EXPIRED
+                invitation.save(update_fields=["status"])
+                return Response({"detail": "Invitation has expired."}, status=status.HTTP_410_GONE)
+            if not first_name:
+                return Response({"detail": "First name is required."}, status=status.HTTP_400_BAD_REQUEST)
+            user = User.objects.filter(email__iexact=invitation.email).first()
+            if user is None:
+                if not password:
+                    return Response({"detail": "Password is required for a new account."}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    validate_password(password, user)
+                except DjangoValidationError as error:
+                    return Response({"password": list(error.messages)}, status=status.HTTP_400_BAD_REQUEST)
+                user = User.objects.create_user(invitation.email, password=password, first_name=first_name, last_name=last_name, is_staff=True)
+            else:
+                user.is_staff = True
+                if not user.first_name:
+                    user.first_name = first_name
+                if last_name and not user.last_name:
+                    user.last_name = last_name
+                user.save(update_fields=["is_staff", "first_name", "last_name"])
+            invitation.status = PlatformStaffInvitation.Status.ACCEPTED
+            invitation.accepted_user = user
+            invitation.accepted_at = timezone.now()
+            invitation.save(update_fields=["status", "accepted_user", "accepted_at"])
+        return Response({"detail": "Staff invitation accepted. Sign in through the admin portal.", "email": user.email}, status=status.HTTP_200_OK)
+
+
+class AffiliatePartnerViewSet(viewsets.ModelViewSet):
+    queryset = AffiliatePartner.objects.select_related('created_by').all()
+    serializer_class = AffiliatePartnerSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = None
+    search_fields = ('name', 'code')
+    ordering_fields = ('name', 'code', 'created_at', 'updated_at')
+    ordering = ('name',)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+
+class ReferralPayoutViewSet(viewsets.ModelViewSet):
+    """Staff-only manual payout review and release queue."""
+    queryset = ReferralPayout.objects.select_related(
+        'referrer_user', 'referred_user', 'affiliate_partner'
+    ).all()
+    serializer_class = ReferralPayoutSerializer
+    permission_classes = [IsAdminUser]
+    http_method_names = ['get', 'patch', 'head', 'options']
+    pagination_class = StandardResultsSetPagination
+    ordering = ('-created_at',)
+
+    def perform_update(self, serializer):
+        # Payment execution remains deliberately manual; this only records the
+        # staff decision after the external transfer has been completed.
+        serializer.save()
 
 
 

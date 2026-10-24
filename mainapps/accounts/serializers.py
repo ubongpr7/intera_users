@@ -1,10 +1,12 @@
+import re
+
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.password_validation import validate_password
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import User, VerificationCode
+from .models import AffiliatePartner, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer
@@ -12,14 +14,18 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer as BaseT
 
 from djoser.social.serializers import ProviderAuthSerializer
 from mainapps.profile.models import CompanyMembership, CompanyProfile
-from mainapps.permit.models import PlatformChoices
+from mainapps.permit.models import CustomUserPermission, PlatformChoices
 from mainapps.accounts.legal import record_signup_consents, validate_signup_consents
 from mainapps.profile.support_access import (
     list_accessible_profile_contexts,
     resolve_profile_access,
 )
 from subapps.kafka.producers import build_actor, publish_support_access_workspace_entered
-from .authorization_context import issue_authorization_context
+from .authorization_context import (
+    has_hosperator_workspace_admin_access,
+    has_workspace_admin_access,
+    issue_authorization_context,
+)
 
 
 def _resolve_referrer(attrs):
@@ -27,11 +33,16 @@ def _resolve_referrer(attrs):
     attrs['referral_code'] = code
     if not code:
         attrs['referrer_user'] = None
+        attrs['affiliate_partner'] = None
         return attrs
     referrer = User.objects.filter(referral_code__iexact=code).first()
-    if referrer is None:
+    partner = AffiliatePartner.objects.filter(code__iexact=code, is_active=True).first()
+    if referrer is not None and partner is not None:
+        raise serializers.ValidationError({'referral_code': 'Referral code is assigned to multiple sources.'})
+    if referrer is None and partner is None:
         raise serializers.ValidationError({'referral_code': 'Referral code is invalid.'})
     attrs['referrer_user'] = referrer
+    attrs['affiliate_partner'] = partner
     return attrs
 
 
@@ -132,6 +143,17 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         if support_grant is not None:
             return support_grant.effective_permission_codenames()
 
+        # Workspace owners and explicit administrators have implicit product
+        # access even when no staff role assignment exists. Keep the
+        # effective-permissions API consistent with internal evaluation so
+        # frontend guards do not deny access that backend endpoints allow.
+        if profile and has_workspace_admin_access(user, profile):
+            return sorted(
+                CustomUserPermission.objects.filter(platform=platform).values_list(
+                    "codename", flat=True
+                )
+            )
+
         user_perms = set()
         user_perms.update(
             user.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
@@ -175,6 +197,15 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         if membership:
             user_perms.update(
                 membership.custom_permissions.filter(platform=platform).values_list("codename", flat=True)
+            )
+
+        if platform == PlatformChoices.HOSPERATOR and has_hosperator_workspace_admin_access(
+            user, profile
+        ):
+            user_perms.update(
+                CustomUserPermission.objects.filter(platform=platform).values_list(
+                    "codename", flat=True
+                )
             )
 
         return sorted(user_perms)
@@ -226,6 +257,15 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["has_setup_mfa"] = bool(getattr(user, "has_setup_mfa", False))
         token["owner_id"] = str(profile.owner_id) if profile and profile.owner_id else None
         token["platform"] = platform
+        affiliate_partner = getattr(user, "referred_by_affiliate_partner", None)
+        token["affiliate_partner_id"] = str(affiliate_partner.id) if affiliate_partner else None
+        token["affiliate_commission_rate"] = str(
+            affiliate_partner.commission_rate
+            if affiliate_partner
+            else getattr(user, "referral_commission_rate", "0.05")
+        )
+        token["affiliate_code"] = affiliate_partner.code if affiliate_partner else None
+        token["referrer_user_id"] = str(user.referred_by_id) if user.referred_by_id else None
 
         role = None
         if support_grant is not None:
@@ -322,6 +362,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             profile=profile,
             support_grant=access.support_grant,
             platform=attrs.get("platform", PlatformChoices.INTERA_IMS),
+            access_token_id=access_token.get("jti"),
         )
 
         accessible_profiles = self.list_accessible_profile_contexts(user)
@@ -350,6 +391,25 @@ class SocialJWTSerializer(ProviderAuthSerializer):
     Override Djoser social provider serializer to mint our JWTs (with custom claims).
     """
 
+    # DRF only emits declared fields, even when create() returns more data.
+    id = serializers.IntegerField(read_only=True)
+    authorization_context = serializers.CharField(read_only=True)
+    username = serializers.CharField(read_only=True, allow_null=True)
+    email = serializers.EmailField(read_only=True)
+    first_name = serializers.CharField(read_only=True, allow_blank=True)
+    last_name = serializers.CharField(read_only=True, allow_blank=True)
+    is_verified = serializers.BooleanField(read_only=True)
+    is_staff = serializers.BooleanField(read_only=True)
+    is_superuser = serializers.BooleanField(read_only=True)
+    profile = serializers.CharField(read_only=True, allow_null=True)
+    profile_context = serializers.JSONField(read_only=True, allow_null=True)
+    profiles = serializers.JSONField(read_only=True)
+    currency = serializers.CharField(read_only=True, allow_null=True)
+    mfa_enabled = serializers.BooleanField(read_only=True)
+    has_setup_mfa = serializers.BooleanField(read_only=True)
+    mfa_verified = serializers.BooleanField(read_only=True)
+    picture = serializers.CharField(read_only=True, allow_null=True)
+
     def validate(self, attrs):
         data = super().validate(attrs)
         user = data.get("user") or getattr(self, "user", None) or self.context.get("request").user
@@ -364,6 +424,9 @@ class SocialJWTSerializer(ProviderAuthSerializer):
         refresh, access = MyTokenObtainPairSerializer.issue_tokens_for_profile(
             user,
             profile_access.profile,
+            # The external identity provider has already authenticated this
+            # login. Do not send SSO users through the local MFA challenge.
+            mfa_verified=True,
             support_grant=profile_access.support_grant,
         )
         return {
@@ -374,6 +437,7 @@ class SocialJWTSerializer(ProviderAuthSerializer):
                 user,
                 profile=profile_access.profile,
                 support_grant=profile_access.support_grant,
+                access_token_id=access.get("jti"),
             ),
             "id": user.id,
             "username": user.username,
@@ -381,22 +445,27 @@ class SocialJWTSerializer(ProviderAuthSerializer):
             "is_staff": bool(user.is_staff),
             "is_superuser": bool(user.is_superuser),
             "profile": str(profile_access.profile.id) if profile_access.profile else None,
-            "profile_context": self._profile_payload(
+            "profile_context": MyTokenObtainPairSerializer._profile_payload(
                 profile_access.profile,
                 user,
                 support_grant=profile_access.support_grant,
             ),
             "profiles": [
-                self._profile_payload(
+                MyTokenObtainPairSerializer._profile_payload(
                     item.profile,
                     user,
                     support_grant=item.support_grant,
                 )
-                for item in self.list_accessible_profile_contexts(user)
+                for item in MyTokenObtainPairSerializer.list_accessible_profile_contexts(user)
             ],
             "currency": profile_access.profile.currency if profile_access.profile else None,
             "email": user.email,
             "first_name": getattr(user, "first_name", ""),
+            "last_name": getattr(user, "last_name", ""),
+            "mfa_enabled": bool(getattr(user, "mfa_enabled", False)),
+            "has_setup_mfa": bool(getattr(user, "has_setup_mfa", False)),
+            "mfa_verified": True,
+            "picture": user.get_picture() if hasattr(user, "get_picture") else None,
         }
 
 
@@ -470,6 +539,7 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
             profile=active_access.profile,
             support_grant=active_access.support_grant,
             platform=platform,
+            access_token_id=custom_access.get("jti"),
         )
         if "refresh" in data:
             data["refresh"] = str(custom_refresh)
@@ -510,6 +580,33 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'email', 'first_name', 'last_name','role']
         ref_name = "AccountsUser"
 
+
+class AffiliatePartnerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AffiliatePartner
+        fields = (
+            'id', 'name', 'code', 'commission_rate', 'is_active', 'notes',
+            'created_by', 'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
+
+    def validate_code(self, value):
+        code = value.strip().upper()
+        user_codes = User.objects.filter(referral_code__iexact=code)
+        if user_codes.exists():
+            raise serializers.ValidationError('This code is already assigned to a user referral.')
+        partner_codes = AffiliatePartner.objects.filter(code__iexact=code)
+        if self.instance is not None:
+            partner_codes = partner_codes.exclude(pk=self.instance.pk)
+        if partner_codes.exists():
+            raise serializers.ValidationError('This affiliate code is already in use.')
+        return code
+
+    def validate_commission_rate(self, value):
+        if value < 0 or value > 1:
+            raise serializers.ValidationError('Commission rate must be between 0 and 1.')
+        return value
+
 class VerificationCodeSerializer(serializers.ModelSerializer):
     class Meta:
         model = VerificationCode
@@ -537,6 +634,7 @@ class UserCreateSerializer(BaseUserCreateSerializer):
         
     def create(self, validated_data):
         referrer = validated_data.pop('referrer_user', None)
+        affiliate_partner = validated_data.pop('affiliate_partner', None)
         validated_data.pop('referral_code', None)
         user = User.objects.create_user(
             email=validated_data['email'].lower(),
@@ -544,6 +642,7 @@ class UserCreateSerializer(BaseUserCreateSerializer):
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', ''),
             referred_by=referrer,
+            referred_by_affiliate_partner=affiliate_partner,
         )
         record_signup_consents(user, request=self.context.get("request"), source="djoser_signup")
         return user
@@ -575,9 +674,10 @@ class MyUserSerializer(serializers.ModelSerializer):
             'has_setup_mfa',
             'profile',
             'referral_code',
+            'referral_commission_rate',
         )
         read_only_fields = (
-            'id', 'get_full_name',
+            'id', 'get_full_name', 'referral_commission_rate',
         )
         ref_name = "AccountsCoreMyUser"
 
@@ -596,6 +696,53 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'sex',
             'date_of_birth',
             'picture',
+            'referral_code',
+            'referral_commission_rate',
+        )
+
+    def validate_referral_code(self, value):
+        code = value.strip().upper()
+        if not code:
+            raise serializers.ValidationError('Referral code cannot be blank.')
+        if not re.match(r'^[A-Z0-9_-]{3,16}$', code):
+            raise serializers.ValidationError('Use 3-16 letters, numbers, hyphens, or underscores.')
+        users = User.objects.filter(referral_code__iexact=code).exclude(pk=self.instance.pk)
+        if users.exists() or AffiliatePartner.objects.filter(code__iexact=code).exists():
+            raise serializers.ValidationError('This referral code is already in use.')
+        return code
+
+    def validate_referral_commission_rate(self, value):
+        if value < 0 or value > 1:
+            raise serializers.ValidationError('Commission rate must be between 0 and 1.')
+        return value
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        if ('referral_code' in attrs or 'referral_commission_rate' in attrs) and not (
+            request and (request.user.is_staff or request.user.is_superuser)
+        ):
+            raise serializers.ValidationError('Only platform staff can manage referral settings.')
+        return attrs
+
+
+class ReferralPayoutSerializer(serializers.ModelSerializer):
+    referrer_email = serializers.CharField(source='referrer_user.email', read_only=True)
+    referred_email = serializers.CharField(source='referred_user.email', read_only=True)
+    affiliate_name = serializers.CharField(source='affiliate_partner.name', read_only=True, allow_null=True)
+
+    class Meta:
+        model = ReferralPayout
+        fields = (
+            'id', 'referrer_user', 'referrer_email', 'affiliate_partner', 'affiliate_name',
+            'referred_user', 'referred_email', 'commission_rate', 'payment_amount',
+            'payout_amount', 'currency', 'payment_reference', 'payment_id', 'profile_id',
+            'plan_slug', 'status', 'metadata', 'created_at', 'updated_at',
+        )
+        read_only_fields = (
+            'id', 'referrer_user', 'referrer_email', 'affiliate_partner', 'affiliate_name',
+            'referred_user', 'referred_email', 'commission_rate', 'payment_amount',
+            'payout_amount', 'currency', 'payment_reference', 'payment_id', 'profile_id',
+            'plan_slug', 'created_at', 'updated_at',
         )
 
 
@@ -621,6 +768,7 @@ class OwnerRegistrationSerializer(serializers.Serializer):
     def create(self, validated_data):
         validated_data.pop("re_password")
         referrer = validated_data.pop('referrer_user', None)
+        affiliate_partner = validated_data.pop('affiliate_partner', None)
         validated_data.pop('referral_code', None)
         user = User.objects.create_user(
             email=validated_data["email"].lower(),
@@ -628,6 +776,7 @@ class OwnerRegistrationSerializer(serializers.Serializer):
             first_name=validated_data.get("first_name", ""),
             last_name=validated_data.get("last_name", ""),
             referred_by=referrer,
+            referred_by_affiliate_partner=affiliate_partner,
         )
         record_signup_consents(user, request=self.context.get("request"), source="owner_signup")
         return user

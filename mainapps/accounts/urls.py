@@ -4,6 +4,8 @@ from . import views
 
 router = DefaultRouter()
 router.register(r'users', views.UserViewSet)
+router.register(r'affiliate-partners', views.AffiliatePartnerViewSet, basename='affiliate-partner')
+router.register(r'referral-payouts', views.ReferralPayoutViewSet, basename='referral-payout')
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -15,5 +17,10 @@ urlpatterns = [
     path("mfa/reset/request/", views.MfaResetRequestView.as_view(), name="mfa-reset-request"),
     path("mfa/reset/confirm/", views.MfaResetConfirmView.as_view(), name="mfa-reset-confirm"),
     path("websocket-ticket/", views.WebSocketTicketView.as_view(), name="websocket-ticket"),
+    path("signing-keys/", views.PublicSigningKeysView.as_view(), name="public-signing-keys"),
     path("mfa/toggle/", views.MfaToggleView.as_view(), name="mfa-toggle"),
+    path("platform-staff-invitations/", views.PlatformStaffInvitationView.as_view(), name="platform-staff-invitations"),
+    path("platform-staff-invitations/<uuid:invitation_id>/revoke/", views.PlatformStaffInvitationRevokeView.as_view(), name="platform-staff-invitation-revoke"),
+    path("platform-staff-invitations/lookup/", views.PlatformStaffInvitationLookupView.as_view(), name="platform-staff-invitation-lookup"),
+    path("platform-staff-invitations/accept/", views.PlatformStaffInvitationAcceptView.as_view(), name="platform-staff-invitation-accept"),
 ]

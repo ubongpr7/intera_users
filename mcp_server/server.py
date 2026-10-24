@@ -761,7 +761,13 @@ def _list_company_roles_sync(*, principal: UsersMcpPrincipal, profile_id: str) -
         method="get",
         pk=profile_id,
     )
-    return {"profile_id": principal.profile_id, "results": payload}
+    # The profile view returns database integer IDs, while the MCP contract
+    # exposes identifiers as strings consistently with the other user payloads.
+    results = [
+        {**item, "id": str(item["id"])} if isinstance(item, dict) and item.get("id") is not None else item
+        for item in (payload if isinstance(payload, list) else [])
+    ]
+    return {"profile_id": principal.profile_id, "results": results}
 
 
 def _list_company_groups_sync(*, principal: UsersMcpPrincipal, profile_id: str) -> dict[str, Any]:
@@ -772,7 +778,11 @@ def _list_company_groups_sync(*, principal: UsersMcpPrincipal, profile_id: str) 
         method="get",
         pk=profile_id,
     )
-    return {"profile_id": principal.profile_id, "results": payload}
+    results = [
+        {**item, "id": str(item["id"])} if isinstance(item, dict) and item.get("id") is not None else item
+        for item in (payload if isinstance(payload, list) else [])
+    ]
+    return {"profile_id": principal.profile_id, "results": results}
 
 
 def _get_staff_permissions_summary_sync(

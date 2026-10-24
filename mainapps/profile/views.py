@@ -21,8 +21,10 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from drf_yasg.utils import swagger_auto_schema
 
 from mainapps.accounts.api.serializers import MyUserSerializer
+from mainapps.accounts.authorization_context import authorization_context_from_request
 from mainapps.common.settings import get_company_or_profile
 from mainapps.permit.permit import HasModelRequestPermission, PermissionRequiredMixin
 from mainapps.permit.models import PlatformChoices
@@ -80,6 +82,7 @@ from .serializers import (
     RecallPolicySerializer,
     ReorderStrategySerializer,
     CompanyMembershipStaffSerializer,
+    StaffCallDirectoryResponseSerializer,
     StaffAssignmentSerializer,
     StaffGroupListSerializer,
     StaffGroupSerializer,
@@ -342,6 +345,88 @@ class InternalHosperatorProfileMembersView(APIView):
         return response
 
 
+class InternalHosperatorCallingDeviceValidationView(APIView):
+    """Validate the minimum trusted-device facts needed for a call invitation."""
+
+    authentication_classes = []
+    permission_classes = []
+    _maximum_devices = 2
+
+    def post(self, request, profile_id):
+        _require_hosperator_core_service_key(request)
+        raw_devices = request.data.get("devices")
+        if not isinstance(raw_devices, list) or not raw_devices or len(raw_devices) > self._maximum_devices:
+            raise DRFValidationError({"devices": "Provide between 1 and 2 calling devices."})
+
+        requested = []
+        seen_device_ids = set()
+        for index, value in enumerate(raw_devices):
+            if not isinstance(value, dict):
+                raise DRFValidationError({"devices": f"Device at index {index} must be an object."})
+            device_id = str(value.get("device_id") or "").strip()
+            capability = str(value.get("required_capability") or "staff_call").strip()
+            try:
+                user_id = int(value.get("user_id"))
+            except (TypeError, ValueError) as exc:
+                raise DRFValidationError({"devices": f"Device at index {index} has an invalid user_id."}) from exc
+            if not device_id or len(device_id) > 255 or user_id <= 0 or capability != "staff_call":
+                raise DRFValidationError({"devices": f"Device at index {index} is invalid."})
+            if device_id in seen_device_ids:
+                raise DRFValidationError({"devices": "Device identifiers must be unique."})
+            seen_device_ids.add(device_id)
+            requested.append((device_id, user_id, str(value.get("care_site_id") or "").strip()))
+
+        freshness_seconds = max(
+            30,
+            int(getattr(settings, "TRUSTED_DEVICE_PRESENCE_TTL_SECONDS", 120)),
+        )
+        freshness_cutoff = timezone.now() - timedelta(seconds=freshness_seconds)
+        bindings = {
+            binding.device_identifier: binding
+            for binding in TrustedWorkspaceDevice.objects.filter(
+                profile_id=profile_id,
+                platform=PlatformChoices.HOSPERATOR,
+                device_identifier__in=seen_device_ids,
+            )
+        }
+        results = []
+        for device_id, user_id, care_site_id in requested:
+            binding = bindings.get(device_id)
+            valid = bool(
+                binding
+                and binding.is_active
+                and not binding.is_revoked
+                and "staff_call" in (binding.capabilities or [])
+                and binding.last_seen_by_user_id == user_id
+                and binding.last_seen_at
+                and binding.last_seen_at >= freshness_cutoff
+                and (
+                    not care_site_id
+                    or binding.care_site_id is None
+                    or str(binding.care_site_id) == care_site_id
+                )
+            )
+            results.append(
+                {
+                    "device_id": device_id,
+                    "user_id": str(user_id),
+                    "valid": valid,
+                    "binding_id": str(binding.id) if valid else None,
+                    "care_site_id": str(binding.care_site_id) if valid and binding.care_site_id else None,
+                }
+            )
+
+        response = Response(
+            {
+                "profile_id": str(profile_id),
+                "freshness_seconds": freshness_seconds,
+                "results": results,
+            }
+        )
+        response["Cache-Control"] = "no-store"
+        return response
+
+
 class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
     queryset = CompanyProfile.objects.all()
     permission_classes = [IsAuthenticated, HasModelRequestPermission]
@@ -422,16 +507,130 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         serializer = CompanyMembershipStaffSerializer(staff_memberships, many=True)
         return Response(serializer.data)
 
+    @swagger_auto_schema(
+        responses={200: StaffCallDirectoryResponseSerializer()},
+        operation_description=(
+            "Return the bounded, workspace-scoped staff calling directory. Active "
+            "workspace membership is sufficient; administrative directory permission is not required."
+        ),
+    )
     @action(detail=True, methods=["get"], url_path="staff-call-directory")
     def staff_call_directory(self, request, pk=None):
         """Return the minimum active-membership projection used for staff calling."""
         profile = self.get_object()
-        staff_memberships = (
+        context = authorization_context_from_request(request)
+        requested_limit = request.query_params.get("limit", "128")
+        try:
+            limit = min(max(int(requested_limit), 1), 128)
+        except (TypeError, ValueError) as exc:
+            raise DRFValidationError({"limit": "Limit must be an integer between 1 and 128."}) from exc
+
+        staff_memberships = list(
             CompanyMembership.objects.filter(profile=profile, is_active=True)
             .select_related("user")
             .order_by("user__first_name", "user__last_name", "user_id")
+            [:limit]
         )
-        return Response(CompanyMembershipStaffSerializer(staff_memberships, many=True).data)
+        user_ids = [membership.user_id for membership in staff_memberships]
+        now = timezone.now()
+        role_names = {}
+        for assignment in (
+            StaffRoleAssignment.objects.filter(
+                profile=profile,
+                user_id__in=user_ids,
+                is_active=True,
+                role__platform=PlatformChoices.HOSPERATOR,
+                start_date__lte=now,
+            )
+            .filter(Q(end_date__isnull=True) | Q(end_date__gte=now))
+            .select_related("role")
+            .order_by("user_id", "-start_date")
+        ):
+            role_names.setdefault(assignment.user_id, assignment.role.name)
+
+        department_names = {user_id: [] for user_id in user_ids}
+        groups = (
+            StaffGroup.objects.filter(
+                profile=profile,
+                platform=PlatformChoices.HOSPERATOR,
+                is_active=True,
+                users__id__in=user_ids,
+            )
+            .prefetch_related("users")
+            .distinct()
+            .order_by("name")
+        )
+        for group in groups:
+            for user in group.users.all():
+                if user.id in department_names:
+                    department_names[user.id].append(group.name)
+
+        presence_cutoff = now - timedelta(
+            seconds=max(30, int(getattr(settings, "TRUSTED_DEVICE_PRESENCE_TTL_SECONDS", 120)))
+        )
+        devices_by_user = {user_id: [] for user_id in user_ids}
+        for device in TrustedWorkspaceDevice.objects.filter(
+            profile=profile,
+            platform=PlatformChoices.HOSPERATOR,
+            is_active=True,
+            is_revoked=False,
+            last_seen_by_user_id__in=user_ids,
+            last_seen_at__gte=presence_cutoff,
+        ):
+            if "staff_call" in (device.capabilities or []):
+                devices_by_user[device.last_seen_by_user_id].append(device)
+
+        results = []
+        for membership in staff_memberships:
+            user = membership.user
+            devices = devices_by_user.get(user.id, [])
+            capabilities = sorted(
+                {
+                    str(capability)
+                    for device in devices
+                    for capability in (device.capabilities or [])
+                    if str(capability).strip()
+                }
+            )
+            care_site_scope = sorted(
+                {str(device.care_site_id) for device in devices if device.care_site_id}
+            )
+            display_name = user_display_name(user).strip() or user.email
+            results.append(
+                {
+                    "staff_id": str(user.id),
+                    "display_name": display_name,
+                    "role_label": role_names.get(user.id) or membership.get_role_display(),
+                    "department_label": ", ".join(department_names.get(user.id, [])),
+                    "care_site_scope": care_site_scope,
+                    "availability_capability": "staff_call",
+                    "is_active": True,
+                    "enrolled_device_presence": {
+                        "is_present": bool(devices),
+                        "active_device_count": len(devices),
+                        "last_seen_at": max(
+                            (device.last_seen_at for device in devices if device.last_seen_at),
+                            default=None,
+                        ),
+                        "capabilities": capabilities,
+                    },
+                }
+            )
+
+        signed_scope = context.get("hosperator_care_site_scope") or {}
+        response = Response(
+            {
+                "organisation_id": str(profile.id),
+                "profile_id": str(profile.id),
+                "care_site_scope": signed_scope.get("care_site_ids") or [],
+                "authorization_context_hash": context.get("access_context_hash") or "",
+                "generated_at": now,
+                "count": CompanyMembership.objects.filter(profile=profile, is_active=True).count(),
+                "results": results,
+            }
+        )
+        response["Cache-Control"] = "no-store"
+        return response
 
     @action(detail=True, methods=["post"])
     def add_staff(self, request, pk=None):
@@ -1545,6 +1744,20 @@ class TrustedWorkspaceDeviceViewSet(PermissionRequiredMixin, viewsets.ModelViewS
 
     def perform_create(self, serializer):
         profile = _profile_from_request(self.request)
+        care_site_id = serializer.validated_data.get("care_site_id")
+        platform = serializer.validated_data.get("platform", PlatformChoices.HOSPERATOR)
+        if care_site_id and platform != PlatformChoices.HOSPERATOR:
+            raise DRFValidationError(
+                {"care_site_id": "Care-site binding is only supported for Hosperator devices."}
+            )
+        if care_site_id:
+            context = authorization_context_from_request(self.request)
+            signed_scope = context.get("hosperator_care_site_scope") or {}
+            allowed_site_ids = signed_scope.get("care_site_ids") or []
+            if "*" not in allowed_site_ids and str(care_site_id) not in allowed_site_ids:
+                raise DRFValidationError(
+                    {"care_site_id": "The signed session does not permit this care site."}
+                )
         device = serializer.save(
             profile=profile,
             created_by=self.request.user,
@@ -1633,7 +1846,8 @@ class TrustedWorkspaceDeviceViewSet(PermissionRequiredMixin, viewsets.ModelViewS
         is_enrolled = binding.is_active and not binding.is_revoked
         if is_enrolled:
             binding.last_seen_at = timezone.now()
-            binding.save(update_fields=["last_seen_at", "updated_at"])
+            binding.last_seen_by_user = request.user
+            binding.save(update_fields=["last_seen_at", "last_seen_by_user", "updated_at"])
         return Response(
             {
                 "is_enrolled": is_enrolled,

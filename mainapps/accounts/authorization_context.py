@@ -7,12 +7,14 @@ import re
 from uuid import uuid4
 
 import jwt
+from jwt.algorithms import RSAAlgorithm
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from django.conf import settings
 from django.db.models import Q
 from rest_framework.exceptions import AuthenticationFailed
 
 from mainapps.profile.models import CompanyMembership
-from mainapps.permit.models import PlatformChoices
+from mainapps.permit.models import CustomUserPermission, PlatformChoices
 
 AUTHORIZATION_CONTEXT_HEADER = "X-Intera-Authorization-Context"
 AUTHORIZATION_CONTEXT_TOKEN_TYPE = "intera_authorization_context"
@@ -35,6 +37,32 @@ def _verifying_key():
     return _signing_key()
 
 
+def _signing_key_id() -> str:
+    configured = str(getattr(settings, "JWT_SIGNING_KEY_ID", "") or "").strip()
+    if configured:
+        return configured
+    verifying_key = str(_verifying_key() or "").encode("utf-8")
+    return hashlib.sha256(verifying_key).hexdigest()[:16]
+
+
+def public_signing_jwks() -> dict:
+    algorithm = str(_setting("ALGORITHM", "HS256")).upper()
+    if not algorithm.startswith("RS"):
+        raise RuntimeError("Public signing-key discovery requires an RSA JWT algorithm.")
+    verifying_key = _verifying_key()
+    if isinstance(verifying_key, str):
+        verifying_key = verifying_key.encode("utf-8")
+    if isinstance(verifying_key, (bytes, bytearray)):
+        verifying_key = load_pem_public_key(verifying_key)
+    jwk = json.loads(RSAAlgorithm.to_jwk(verifying_key))
+    jwk.update({"kid": _signing_key_id(), "use": "sig", "alg": algorithm})
+    return {"keys": [jwk]}
+
+
+def _signing_headers() -> dict:
+    return {"kid": _signing_key_id()}
+
+
 def _issuer():
     return getattr(settings, "JWT_ISSUER", None) or _setting("ISSUER") or "intera-users"
 
@@ -54,13 +82,21 @@ def _lifetime() -> timedelta:
     )
 
 
-def access_context_hash(*, user_id, profile_id, session_version, platform=PlatformChoices.INTERA_IMS) -> str:
+def access_context_hash(
+    *,
+    user_id,
+    profile_id,
+    session_version,
+    platform=PlatformChoices.INTERA_IMS,
+    access_token_id=None,
+) -> str:
     value = json.dumps(
         {
             "profile_id": str(profile_id or ""),
             "platform": str(platform or PlatformChoices.INTERA_IMS),
             "session_version": str(session_version or ""),
             "user_id": str(user_id or ""),
+            "access_token_id": str(access_token_id or ""),
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -107,14 +143,14 @@ def _hosperator_care_site_scope(user, profile):
     """Return the care-site entitlement Core can enforce from a signed context.
 
     Care sites are owned by Hosperator Core, not the shared Users database. A
-    tenant owner therefore receives the existing owner-wide scope, while other
-    members receive no implicit clinical scope until explicit site grants are
-    introduced.
+    tenant owner or explicitly assigned workspace administrator receives the
+    workspace-wide operational scope. Other members receive no implicit
+    clinical scope until explicit site grants are introduced.
     """
 
     return {
         "version": 1,
-        "care_site_ids": ["*"] if profile is not None and profile.owner_id == user.id else [],
+        "care_site_ids": ["*"] if has_hosperator_workspace_admin_access(user, profile) else [],
     }
 
 
@@ -133,8 +169,60 @@ def _direct_permissions(user, *, profile=None, support_grant=None, platform=Plat
     return permissions
 
 
-def issue_authorization_context(user, *, profile=None, support_grant=None, platform=PlatformChoices.INTERA_IMS) -> str:
+def has_hosperator_workspace_admin_access(user, profile, *, support_grant=None) -> bool:
+    """Return whether the active member has full Hosperator workspace access.
+
+    Workspace owners and memberships explicitly labelled ``admin`` are the
+    product administrators.  A support session never inherits that authority;
+    it remains constrained by the grant's explicit permission set.
+    """
+
+    if profile is None or support_grant is not None:
+        return False
+    if profile.owner_id == user.id:
+        return True
+    return CompanyMembership.objects.filter(
+        user=user,
+        profile=profile,
+        is_active=True,
+        role=CompanyMembership.MembershipRole.ADMIN,
+    ).exists()
+
+
+def has_workspace_admin_access(user, profile, *, support_grant=None) -> bool:
+    """Return whether a user has implicit administrator access in a workspace.
+
+    Owners and explicitly-admin members historically had workspace-wide access
+    without being assigned a staff role. That relationship is authoritative
+    workspace state, so it must remain part of server-side evaluation after
+    detailed permissions are removed from authorization-context JWTs.
+    """
+
+    if profile is None or support_grant is not None:
+        return False
+    if profile.owner_id == user.id:
+        return True
+    return CompanyMembership.objects.filter(
+        user=user,
+        profile=profile,
+        is_active=True,
+        role=CompanyMembership.MembershipRole.ADMIN,
+    ).exists()
+
+
+def issue_authorization_context(
+    user,
+    *,
+    profile=None,
+    support_grant=None,
+    platform=PlatformChoices.INTERA_IMS,
+    access_token_id=None,
+) -> str:
     now = datetime.now(timezone.utc)
+    # Authorization contexts carry only identity and scope metadata. Detailed
+    # permissions are resolved by Users' evaluator for each active profile;
+    # embedding them here makes tokens large and turns stale claims into an
+    # authorization risk.
     payload = {
         "token_type": AUTHORIZATION_CONTEXT_TOKEN_TYPE,
         "jti": str(uuid4()),
@@ -147,11 +235,13 @@ def issue_authorization_context(user, *, profile=None, support_grant=None, platf
         "profile_id": str(profile.id) if profile else None,
         "platform": platform,
         "session_version": getattr(user, "session_version", None),
+        "access_token_id": str(access_token_id or ""),
         "access_context_hash": access_context_hash(
             user_id=user.id,
             profile_id=profile.id if profile else None,
             session_version=getattr(user, "session_version", None),
             platform=platform,
+            access_token_id=access_token_id,
         ),
         "is_staff": bool(user.is_staff),
         "is_superuser": bool(user.is_superuser),
@@ -159,7 +249,12 @@ def issue_authorization_context(user, *, profile=None, support_grant=None, platf
     }
     if platform == PlatformChoices.HOSPERATOR:
         payload["hosperator_care_site_scope"] = _hosperator_care_site_scope(user, profile)
-    return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
+    return jwt.encode(
+        payload,
+        _signing_key(),
+        algorithm=_setting("ALGORITHM", "HS256"),
+        headers=_signing_headers(),
+    )
 
 
 def _matches_permission(required: str, granted_permissions: set[str]) -> bool:
@@ -192,19 +287,26 @@ def evaluate_permission_grants(
     wildcards, wildcard_permissions = _system_access(user, profile, platform) if profile is not None else ([], {})
     for wildcard in wildcards:
         granted_permissions.update(wildcard_permissions.get(wildcard) or [])
-    if (
-        profile is not None
-        and support_grant is None
-        and profile.owner_id == user.id
-        and platform == PlatformChoices.HOSPERATOR
+    if platform == PlatformChoices.HOSPERATOR and has_hosperator_workspace_admin_access(
+        user, profile, support_grant=support_grant
     ):
         granted_permissions.add("hosperator.*")
+    if platform == PlatformChoices.INTERA_IMS and has_workspace_admin_access(
+        user, profile, support_grant=support_grant
+    ):
+        # Owners/admins retain the same workspace-wide authority they had
+        # before permission details were removed from signed contexts.
+        granted_permissions.update(
+            CustomUserPermission.objects.filter(platform=platform).values_list(
+                "codename", flat=True
+            )
+        )
     return {permission: _matches_permission(permission, granted_permissions) for permission in requested}
 
 
 def issue_websocket_ticket(context_payload: dict) -> str:
     now = datetime.now(timezone.utc)
-    lifetime = int(getattr(settings, "WEBSOCKET_TICKET_LIFETIME_SECONDS", 60))
+    lifetime = websocket_ticket_lifetime_seconds()
     payload = {
         "token_type": WEBSOCKET_TICKET_TOKEN_TYPE,
         "jti": str(uuid4()),
@@ -216,11 +318,23 @@ def issue_websocket_ticket(context_payload: dict) -> str:
         "user_id": context_payload.get("user_id"),
         "profile_id": context_payload.get("profile_id"),
         "platform": context_payload.get("platform", PlatformChoices.INTERA_IMS),
+        "session_version": context_payload.get("session_version"),
+        "access_token_id": context_payload.get("access_token_id"),
+        "authorization_context_jti": context_payload.get("jti"),
         "access_context_hash": context_payload.get("access_context_hash"),
         "is_staff": bool(context_payload.get("is_staff")),
         "is_owner": bool(context_payload.get("is_owner")),
     }
-    return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
+    return jwt.encode(
+        payload,
+        _signing_key(),
+        algorithm=_setting("ALGORITHM", "HS256"),
+        headers=_signing_headers(),
+    )
+
+
+def websocket_ticket_lifetime_seconds() -> int:
+    return max(1, min(int(getattr(settings, "WEBSOCKET_TICKET_LIFETIME_SECONDS", 60)), 300))
 
 
 def issue_device_enrollment_proof(binding, *, user_id=None) -> str:
@@ -242,12 +356,19 @@ def issue_device_enrollment_proof(binding, *, user_id=None) -> str:
         "aud": _audience(),
         "device_id": str(binding.device_identifier),
         "enrollment_id": str(binding.id),
+        "organisation_id": str(binding.profile_id),
         "profile_id": str(binding.profile_id),
+        "care_site_id": str(binding.care_site_id) if binding.care_site_id else None,
         "platform": str(binding.platform),
         "capabilities": sorted({str(item).strip() for item in (binding.capabilities or []) if str(item).strip()}),
         "user_id": str(user_id) if user_id is not None else None,
     }
-    return jwt.encode(payload, _signing_key(), algorithm=_setting("ALGORITHM", "HS256"))
+    return jwt.encode(
+        payload,
+        _signing_key(),
+        algorithm=_setting("ALGORITHM", "HS256"),
+        headers=_signing_headers(),
+    )
 
 
 def decode_authorization_context(token: str) -> dict:
@@ -276,6 +397,7 @@ def authorization_context_from_request(request) -> dict:
         profile_id=access_payload.get("profile_id"),
         session_version=access_payload.get("session_version"),
         platform=access_payload.get("platform", PlatformChoices.INTERA_IMS),
+        access_token_id=access_payload.get("jti"),
     )
     if payload.get("access_context_hash") != expected:
         raise AuthenticationFailed("Authorization context does not match the access token.")

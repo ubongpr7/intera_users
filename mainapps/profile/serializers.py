@@ -196,11 +196,40 @@ class CompanyMembershipStaffSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class StaffCallDevicePresenceSerializer(serializers.Serializer):
+    is_present = serializers.BooleanField()
+    active_device_count = serializers.IntegerField(min_value=0)
+    last_seen_at = serializers.DateTimeField(allow_null=True)
+    capabilities = serializers.ListField(child=serializers.CharField())
+
+
+class StaffCallDirectoryEntrySerializer(serializers.Serializer):
+    staff_id = serializers.CharField()
+    display_name = serializers.CharField()
+    role_label = serializers.CharField()
+    department_label = serializers.CharField(allow_blank=True)
+    care_site_scope = serializers.ListField(child=serializers.CharField())
+    availability_capability = serializers.CharField()
+    is_active = serializers.BooleanField()
+    enrolled_device_presence = StaffCallDevicePresenceSerializer()
+
+
+class StaffCallDirectoryResponseSerializer(serializers.Serializer):
+    organisation_id = serializers.CharField()
+    profile_id = serializers.CharField()
+    care_site_scope = serializers.ListField(child=serializers.CharField())
+    authorization_context_hash = serializers.CharField()
+    generated_at = serializers.DateTimeField()
+    count = serializers.IntegerField(min_value=0)
+    results = StaffCallDirectoryEntrySerializer(many=True)
+
+
 class TrustedWorkspaceDeviceSerializer(serializers.ModelSerializer):
     """Explicit contract for durable workspace device trust and local proof."""
 
     status = serializers.SerializerMethodField()
     signed_enrollment_proof = serializers.SerializerMethodField()
+    last_seen_by_user_id = serializers.IntegerField(read_only=True, allow_null=True)
     capabilities = serializers.ListField(
         child=serializers.CharField(max_length=64),
         required=False,
@@ -218,6 +247,7 @@ class TrustedWorkspaceDeviceSerializer(serializers.ModelSerializer):
             "platform",
             "device_identifier",
             "device_label",
+            "care_site_id",
             "capabilities",
             "is_active",
             "is_revoked",
@@ -226,6 +256,7 @@ class TrustedWorkspaceDeviceSerializer(serializers.ModelSerializer):
             "revoked_by",
             "revoked_at",
             "last_seen_at",
+            "last_seen_by_user_id",
             "created_at",
             "updated_at",
             "signed_enrollment_proof",
@@ -240,6 +271,7 @@ class TrustedWorkspaceDeviceSerializer(serializers.ModelSerializer):
             "revoked_by",
             "revoked_at",
             "last_seen_at",
+            "last_seen_by_user_id",
             "created_at",
             "updated_at",
             "signed_enrollment_proof",

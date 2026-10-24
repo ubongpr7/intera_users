@@ -96,6 +96,15 @@ class CombinedPermissions(models.TextChoices):
     VIEW_INVENTORY_REPORTS = 'view_inventory_reports', _('Can view inventory reports')
     VIEW_DASHBOARD_REPORTS = 'can_view_dashboard', _('Can view Dashboard reports')
 
+    # Manufacturing and financial-control permissions
+    READ_MANUFACTURING = 'read_manufacturing', _('Can read manufacturing')
+    MANAGE_MANUFACTURING = 'manage_manufacturing', _('Can manage manufacturing')
+    MANAGE_WORK_CENTERS = 'manage_work_centers', _('Can manage work centers')
+    MANAGE_QUALITY = 'manage_quality', _('Can manage quality workflows')
+    MANAGE_WASTE_COSTING = 'manage_waste_costing', _('Can manage waste and by-product costing')
+    VIEW_PROFITABILITY_REPORTS = 'view_profitability_reports', _('Can view profitability reports')
+    MANAGE_ACCOUNTING_PERIODS = 'manage_accounting_periods', _('Can manage accounting periods')
+
     # POS Permissions
     READ_POS = 'read_pos', _('Can read POS workspace')
     OPERATE_POS = 'operate_pos', _('Can operate POS sessions, orders, and checkout')

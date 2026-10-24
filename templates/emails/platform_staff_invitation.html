@@ -1,0 +1,7 @@
+{% extends "emails/intera_email_base.html" %}
+{% block content %}
+<h1>You have been invited to Intera IMS administration</h1>
+<p>{{ invited_by_email }} invited you to join the Intera IMS staff administration team.</p>
+<p><a href="{{ accept_url }}">Accept staff invitation</a></p>
+<p>This invitation expires on {{ expires_at }}. It grants staff access only; it does not grant superuser access.</p>
+{% endblock %}

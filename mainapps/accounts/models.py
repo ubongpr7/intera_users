@@ -2,6 +2,9 @@ import os
 import random
 import secrets
 import string
+import re
+import hashlib
+import uuid
 from datetime import timedelta
 from PIL import Image
 from django.db import models
@@ -41,6 +44,56 @@ def generate_referral_code():
     return ''.join(secrets.choice(alphabet) for _ in range(12))
 
 
+def referral_code_from_email(email, *, exclude_user_id=None):
+    """Prefer a memorable email-local-part code, then fall back safely."""
+    local_part = str(email or '').split('@', 1)[0].upper()
+    base = re.sub(r'[^A-Z0-9_-]', '', local_part)[:16] or 'REFERRAL'
+    candidate = base
+    existing_users = User.objects.filter(referral_code__iexact=candidate)
+    if exclude_user_id is not None:
+        existing_users = existing_users.exclude(pk=exclude_user_id)
+    if not existing_users.exists() and not AffiliatePartner.objects.filter(code__iexact=candidate).exists():
+        return candidate
+
+    alphabet = string.ascii_uppercase + string.digits
+    for _ in range(20):
+        suffix = ''.join(secrets.choice(alphabet) for _ in range(5))
+        candidate = f'{base[:10]}-{suffix}'[:16]
+        existing_users = User.objects.filter(referral_code__iexact=candidate)
+        if exclude_user_id is not None:
+            existing_users = existing_users.exclude(pk=exclude_user_id)
+        if not existing_users.exists() and not AffiliatePartner.objects.filter(code__iexact=candidate).exists():
+            return candidate
+    return generate_referral_code()
+
+
+class AffiliatePartner(models.Model):
+    name = models.CharField(max_length=160)
+    code = models.CharField(max_length=32, unique=True, db_index=True)
+    commission_rate = models.DecimalField(max_digits=6, decimal_places=5, default='0.05000')
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_affiliate_partners',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('name',)
+
+    def save(self, *args, **kwargs):
+        self.code = self.code.strip().upper()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f'{self.name} ({self.code})'
+
+
 
 
 class CustomUserManager(BaseUserManager):
@@ -59,6 +112,7 @@ class CustomUserManager(BaseUserManager):
         if not email:
             raise ValueError("The Email field must be set")
         email = self.normalize_email(email)
+        extra_fields.setdefault('referral_code', referral_code_from_email(email))
         user = self.model(email=email, **extra_fields)
         if not user.username:
             user.username = email
@@ -134,8 +188,21 @@ class User(AbstractUser):
         default=generate_referral_code,
         db_index=True,
     )
+    referral_commission_rate = models.DecimalField(
+        max_digits=6,
+        decimal_places=5,
+        default='0.05000',
+        help_text='Commission rate applied to subscription payments from direct referrals.',
+    )
     referred_by = models.ForeignKey(
         'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='referred_users',
+    )
+    referred_by_affiliate_partner = models.ForeignKey(
+        AffiliatePartner,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -160,7 +227,7 @@ class User(AbstractUser):
                 img.save(self.picture.path)
         except:
             pass
-        
+
 
     @property
     def get_full_name(self):
@@ -175,14 +242,19 @@ class User(AbstractUser):
         
 
     def get_picture(self):
+        # The default field value is a logical placeholder, not a guaranteed
+        # object in production media storage. Do not emit a URL that can 404.
+        if not self.picture or self.picture.name == 'default.png':
+            return None
         try:
+            if not self.picture.storage.exists(self.picture.name):
+                return None
             return self.picture.url
-        except:
-            no_picture = settings.MEDIA_URL + 'default.png'
-        return no_picture
+        except (OSError, ValueError):
+            return None
 
     def delete(self, *args, **kwargs):
-        if self.picture.url != settings.MEDIA_URL + 'default.png':
+        if self.picture and self.picture.name != 'default.png':
             self.picture.delete()
         super().delete(*args, **kwargs)
 
@@ -190,6 +262,38 @@ class User(AbstractUser):
     def role(self):
         assignment = self.roles.filter(is_active=True).select_related("role").first()
         return assignment.role.name if assignment else None
+
+
+class PlatformStaffInvitation(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        REVOKED = "revoked", "Revoked"
+        EXPIRED = "expired", "Expired"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email = models.EmailField(db_index=True)
+    token_hash = models.CharField(max_length=64, unique=True, editable=False)
+    invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="platform_staff_invitations")
+    accepted_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="accepted_platform_staff_invitations")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("email",), condition=Q(status="pending"), name="accounts_one_pending_platform_staff_invite"),
+        ]
+        ordering = ("-created_at",)
+
+    @staticmethod
+    def normalize_email(value):
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def hash_token(token):
+        return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
 
 
 class ReferralPayout(models.Model):
@@ -201,7 +305,16 @@ class ReferralPayout(models.Model):
     referrer_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name='referral_payouts',
+    )
+    affiliate_partner = models.ForeignKey(
+        AffiliatePartner,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payouts',
     )
     referred_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -229,7 +342,14 @@ class ReferralPayout(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.referrer_user.email}: {self.payout_amount} {self.currency}'
+        owner = (
+            self.referrer_user.email
+            if self.referrer_user
+            else self.affiliate_partner.name
+            if self.affiliate_partner
+            else 'Affiliate'
+        )
+        return f'{owner}: {self.payout_amount} {self.currency}'
 
 
 class LegalConsent(models.Model):

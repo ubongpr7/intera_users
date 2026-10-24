@@ -1,7 +1,7 @@
 from django.test import TestCase
 
 from mainapps.accounts.api.serializers import RootUserCreateSerializer
-from mainapps.accounts.models import LegalConsent, ReferralPayout, User
+from mainapps.accounts.models import AffiliatePartner, LegalConsent, ReferralPayout, User
 from mainapps.accounts.serializers import UserCreateSerializer
 
 
@@ -65,7 +65,23 @@ class SignupLegalConsentTests(TestCase):
         user = User.objects.create_user(email="referrer@example.com", password=self.password)
 
         self.assertTrue(user.referral_code)
-        self.assertEqual(len(user.referral_code), 12)
+        self.assertEqual(user.referral_code, "REFERRER")
+
+    def test_email_local_part_collision_falls_back_to_unique_code(self):
+        User.objects.create_user(email="same@example.com", password=self.password)
+        AffiliatePartner.objects.create(name="Existing partner", code="OTHER")
+
+        second = User.objects.create_user(email="same@example.com.test", password=self.password)
+
+        self.assertNotEqual(second.referral_code, "SAME")
+        self.assertLessEqual(len(second.referral_code), 16)
+
+    def test_email_derived_code_avoids_affiliate_partner_collision(self):
+        AffiliatePartner.objects.create(name="Existing partner", code="BRAND")
+
+        user = User.objects.create_user(email="brand@example.com", password=self.password)
+
+        self.assertNotEqual(user.referral_code, "BRAND")
 
     def test_djoser_signup_links_a_referrer(self):
         referrer = User.objects.create_user(email="referrer@example.com", password=self.password)

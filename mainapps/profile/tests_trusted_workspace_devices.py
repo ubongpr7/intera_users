@@ -1,7 +1,9 @@
 from types import SimpleNamespace
+from uuid import uuid4
 
 import jwt
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.utils import timezone
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -34,12 +36,14 @@ class TrustedWorkspaceDeviceApiTests(TestCase):
         )
 
     def test_current_returns_proof_only_for_the_bound_device(self):
+        care_site_id = uuid4()
         device = TrustedWorkspaceDevice.objects.create(
             profile=self.profile,
             platform=PlatformChoices.HOSPERATOR,
             device_identifier="android-test-device",
             device_label="Ward phone",
             capabilities=["staff_call"],
+            care_site_id=care_site_id,
             created_by=self.owner,
         )
 
@@ -64,6 +68,10 @@ class TrustedWorkspaceDeviceApiTests(TestCase):
         self.assertEqual(claims["token_type"], DEVICE_ENROLLMENT_PROOF_TOKEN_TYPE)
         self.assertEqual(claims["device_id"], device.device_identifier)
         self.assertEqual(claims["profile_id"], str(self.profile.id))
+        self.assertEqual(claims["organisation_id"], str(self.profile.id))
+        self.assertEqual(claims["care_site_id"], str(care_site_id))
+        device.refresh_from_db()
+        self.assertEqual(device.last_seen_by_user_id, self.owner.id)
 
     def test_current_is_not_enrolled_for_an_unknown_device(self):
         response = self.client.get(
@@ -192,3 +200,88 @@ class TrustedWorkspaceDeviceApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["id"], str(device.id))
         self.assertEqual(TrustedWorkspaceDevice.objects.filter(profile=self.profile).count(), 1)
+
+
+class InternalCallingDeviceValidationTests(TestCase):
+    service_key = "core-calling-device-test-key"
+
+    def setUp(self):
+        self.client = APIClient()
+        self.owner = User.objects.create_user(
+            email="calling-device-owner@example.com",
+            password="password123",
+        )
+        self.profile = CompanyProfile.objects.create(owner=self.owner, name="Calling Device Hospital")
+        self.device = TrustedWorkspaceDevice.objects.create(
+            profile=self.profile,
+            platform=PlatformChoices.HOSPERATOR,
+            device_identifier="calling-device",
+            capabilities=["staff_call"],
+            created_by=self.owner,
+            last_seen_by_user=self.owner,
+            last_seen_at=timezone.now(),
+        )
+        self.path = (
+            f"/management/internal/profiles/{self.profile.id}/calling-devices/validate/"
+        )
+
+    @override_settings(PERMISSION_EVALUATION_SERVICE_KEY=service_key)
+    def test_validates_fresh_active_calling_device_for_bound_user(self):
+        response = self.client.post(
+            self.path,
+            {
+                "devices": [
+                    {
+                        "device_id": self.device.device_identifier,
+                        "user_id": str(self.owner.id),
+                        "required_capability": "staff_call",
+                    }
+                ]
+            },
+            format="json",
+            HTTP_X_INTERA_SERVICE_KEY=self.service_key,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["results"][0]["valid"])
+        self.assertEqual(response["Cache-Control"], "no-store")
+
+    @override_settings(PERMISSION_EVALUATION_SERVICE_KEY=service_key)
+    def test_rejects_device_bound_to_another_user_or_revoked(self):
+        other_user = User.objects.create_user(
+            email="calling-device-other@example.com",
+            password="password123",
+        )
+        response = self.client.post(
+            self.path,
+            {
+                "devices": [
+                    {
+                        "device_id": self.device.device_identifier,
+                        "user_id": str(other_user.id),
+                        "required_capability": "staff_call",
+                    }
+                ]
+            },
+            format="json",
+            HTTP_X_INTERA_SERVICE_KEY=self.service_key,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["results"][0]["valid"])
+
+        self.device.revoke(revoked_by=self.owner)
+        revoked = self.client.post(
+            self.path,
+            {
+                "devices": [
+                    {
+                        "device_id": self.device.device_identifier,
+                        "user_id": str(self.owner.id),
+                        "required_capability": "staff_call",
+                    }
+                ]
+            },
+            format="json",
+            HTTP_X_INTERA_SERVICE_KEY=self.service_key,
+        )
+        self.assertFalse(revoked.json()["results"][0]["valid"])

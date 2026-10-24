@@ -15,6 +15,7 @@ from .views import (
     SupportAccessGrantViewSet,
     InternalHosperatorGroupMembersView,
     InternalHosperatorProfileMembersView,
+    InternalHosperatorCallingDeviceValidationView,
     InternalSubscriptionUsageView,
 )
 
@@ -45,6 +46,11 @@ urlpatterns = [
         'internal/profiles/<int:profile_id>/members/',
         InternalHosperatorProfileMembersView.as_view(),
         name='internal-hosperator-profile-members',
+    ),
+    path(
+        'internal/profiles/<int:profile_id>/calling-devices/validate/',
+        InternalHosperatorCallingDeviceValidationView.as_view(),
+        name='internal-hosperator-calling-device-validation',
     ),
     path('internal/subscription-usage/', InternalSubscriptionUsageView.as_view(), name='internal-subscription-usage'),
     path('', include(router.urls)),

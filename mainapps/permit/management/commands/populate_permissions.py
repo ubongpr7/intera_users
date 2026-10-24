@@ -15,16 +15,18 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write("Starting permission population...")
         
-        # Get all existing permissions once for comparison
-        existing_perms = set(
-            CustomUserPermission.objects.filter(platform=PlatformChoices.INTERA_IMS).values_list(
-                'codename',
-                'category__name',
+        # The database uniqueness boundary is (platform, codename). Category
+        # or description changes are updates, not duplicate inserts.
+        existing_perms = {
+            permission.codename: permission
+            for permission in CustomUserPermission.objects.filter(
+                platform=PlatformChoices.INTERA_IMS
             )
-        )
+        }
         
         # Create buffer for batch operations
         permissions_to_create = []
+        permissions_to_update = []
         categories_to_create = {}
         
         with transaction.atomic():
@@ -43,14 +45,24 @@ class Command(BaseCommand):
                 
                 category = categories_to_create[category_name]
                 
-                # Skip existing permissions
-                if (codename, category.name) not in existing_perms:
+                existing = existing_perms.get(codename)
+                if existing is None:
                     permissions_to_create.append(CustomUserPermission(
                         codename=codename,
                         platform=PlatformChoices.INTERA_IMS,
                         category=category,
                         description=label  # Use label as description
                     ))
+                else:
+                    changed = False
+                    if existing.category_id != category.id:
+                        existing.category = category
+                        changed = True
+                    if existing.description != label:
+                        existing.description = label
+                        changed = True
+                    if changed:
+                        permissions_to_update.append(existing)
             
             # Bulk create new permissions
             batch_size = 100
@@ -60,11 +72,18 @@ class Command(BaseCommand):
                 CustomUserPermission.objects.bulk_create(batch, batch_size)
                 created_count += len(batch)
                 self.stdout.write(f"Created {len(batch)} permissions...")
+            if permissions_to_update:
+                CustomUserPermission.objects.bulk_update(
+                    permissions_to_update,
+                    ["category", "description"],
+                    batch_size=batch_size,
+                )
         
         self.stdout.write(
             self.style.SUCCESS(
-                f"Successfully completed! Created {created_count} new permissions. "
-                f"Skipped {len(CombinedPermissions) - created_count} existing entries."
+                f"Successfully completed! Created {created_count} new permissions, "
+                f"updated {len(permissions_to_update)} existing permissions. "
+                f"Skipped {len(CombinedPermissions) - created_count - len(permissions_to_update)} unchanged entries."
             )
         )
 

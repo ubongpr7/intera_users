@@ -3,7 +3,7 @@ import logging
 
 from django.db import transaction
 
-from mainapps.accounts.models import ReferralPayout, User
+from mainapps.accounts.models import AffiliatePartner, ReferralPayout, User
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,12 @@ def handle_affiliate_commission_event(event, **context):
         return False
 
     referrer_id = str(payload.get('referrer_user_id') or referred_user.referred_by_id or '').strip()
-    if not referrer_id:
+    partner_id = str(payload.get('affiliate_partner_id') or referred_user.referred_by_affiliate_partner_id or '').strip()
+    if not referrer_id and not partner_id:
         return True
-    referrer = User.objects.filter(pk=referrer_id).first()
-    if referrer is None:
+    referrer = User.objects.filter(pk=referrer_id).first() if referrer_id else None
+    partner = AffiliatePartner.objects.filter(pk=partner_id).first() if partner_id else None
+    if referrer is None and partner is None:
         logger.warning('Deferring affiliate event; referrer %s does not exist yet.', referrer_id)
         return False
 
@@ -52,6 +54,7 @@ def handle_affiliate_commission_event(event, **context):
             payment_reference=payment_reference,
             defaults={
                 'referrer_user': referrer,
+                'affiliate_partner': partner,
                 'referred_user': referred_user,
                 'commission_rate': commission_rate,
                 'payment_amount': payment_amount,

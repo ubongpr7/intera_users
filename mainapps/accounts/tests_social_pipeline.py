@@ -4,7 +4,10 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 from social_core.exceptions import AuthForbidden
 
-from .social_pipeline import associate_verified_google_by_email
+from .social_pipeline import (
+    associate_verified_google_by_email,
+    preserve_existing_user_details,
+)
 
 
 class VerifiedGoogleAssociationTests(SimpleTestCase):
@@ -47,6 +50,19 @@ class VerifiedGoogleAssociationTests(SimpleTestCase):
             )
 
         self.assertIsNone(result)
+
+    def test_existing_account_details_are_not_overwritten_by_google(self):
+        existing = SimpleNamespace(first_name="Intera", last_name="Name")
+        result = preserve_existing_user_details(
+            strategy=SimpleNamespace(),
+            details={"first_name": "Google", "last_name": "Name"},
+            backend=self.backend,
+            user=existing,
+            is_new=False,
+        )
+
+        self.assertEqual(result, {"user": existing})
+        self.assertEqual(existing.first_name, "Intera")
 
 
 class _QuerySet(list):

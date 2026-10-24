@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from mainapps.accounts.models import User
+from mainapps.accounts.models import AffiliatePartner, User
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from mainapps.profile.api.serializers import StaffRoleAssignmentSerializer
 from mainapps.permit.models import CustomUserPermission
@@ -14,11 +14,16 @@ def _resolve_referrer(attrs):
     attrs['referral_code'] = code
     if not code:
         attrs['referrer_user'] = None
+        attrs['affiliate_partner'] = None
         return attrs
     referrer = User.objects.filter(referral_code__iexact=code).first()
-    if referrer is None:
+    partner = AffiliatePartner.objects.filter(code__iexact=code, is_active=True).first()
+    if referrer is not None and partner is not None:
+        raise serializers.ValidationError({'referral_code': 'Referral code is assigned to multiple sources.'})
+    if referrer is None and partner is None:
         raise serializers.ValidationError({'referral_code': 'Referral code is invalid.'})
     attrs['referrer_user'] = referrer
+    attrs['affiliate_partner'] = partner
     return attrs
 
 
@@ -44,11 +49,15 @@ class RootUserCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.pop("re_password", None)
         referrer = validated_data.pop('referrer_user', None)
+        affiliate_partner = validated_data.pop('affiliate_partner', None)
         validated_data.pop('referral_code', None)
         user = User.objects.create_user(**validated_data)
         if referrer is not None:
             user.referred_by = referrer
-            user.save(update_fields=['referred_by'])
+        if affiliate_partner is not None:
+            user.referred_by_affiliate_partner = affiliate_partner
+        if referrer is not None or affiliate_partner is not None:
+            user.save(update_fields=['referred_by', 'referred_by_affiliate_partner'])
         record_signup_consents(user, request=self.context.get("request"), source="root_signup")
         return user
     

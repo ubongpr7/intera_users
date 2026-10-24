@@ -84,8 +84,8 @@ _default_allowed_hosts = [
     'localhost',
     '127.0.0.1',
     '10.0.2.2',
-    'accounts.interaims.com',
-    'dev.accounts.interaims.com',
+    'users.api.interaims.com',
+    'users.dev.interaims.com',
     'host.docker.internal'
     
 ]
@@ -245,6 +245,20 @@ HOSPERATOR_FRONTEND_SITE_URL = os.getenv(
     "HOSPERATOR_FRONTEND_SITE_URL",
     FRONTEND_SITE_URL,
 ).strip().rstrip("/")
+
+# social-auth uses provider-specific setting names. Keep the existing Google
+# environment names as the public contract and map them here so local and
+# deployed environments behave identically.
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.getenv(
+    "SOCIAL_AUTH_GOOGLE_OAUTH2_KEY",
+    os.getenv("GOOGLE_CLIENT_ID", ""),
+).strip()
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.getenv(
+    "SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET",
+    os.getenv("GOOGLE_CLIENT_SECRET", ""),
+).strip()
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = ["openid", "email", "profile"]
+
 _default_frontend_action_allowed_origins = [
     FRONTEND_SITE_URL,
     INTERA_IMS_FRONTEND_SITE_URL,
@@ -314,7 +328,15 @@ SOCIAL_AUTH_PIPELINE = (
     'social_core.pipeline.user.create_user',
     'social_core.pipeline.social_auth.associate_user',
     'social_core.pipeline.social_auth.load_extra_data',
-    'social_core.pipeline.user.user_details',
+    'mainapps.accounts.social_pipeline.preserve_existing_user_details',
+)
+
+# Provider profile data must not replace the name an existing Intera IMS user
+# has already chosen. This applies to every social-auth pipeline branch,
+# including accounts that already have a Google social-auth association.
+SOCIAL_AUTH_PROTECTED_USER_FIELDS = (
+    'first_name',
+    'last_name',
 )
 
 
@@ -327,6 +349,7 @@ def _read_key_from_env(value_var: str) -> str | None:
 
 
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "RS256")
+JWT_SIGNING_KEY_ID = os.getenv("JWT_SIGNING_KEY_ID", "users-primary")
 JWT_SIGNING_KEY = _read_key_from_env("JWT_PRIVATE_KEY")
 JWT_VERIFYING_KEY = _read_key_from_env("JWT_PUBLIC_KEY")
 
@@ -361,7 +384,21 @@ DJOSER = {
         'user_create': 'mainapps.accounts.serializers.UserCreateSerializer',
     },
 
-    'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': os.getenv('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', '').split(','),
+    # The native Kotlin client completes the OAuth exchange after receiving
+    # this deep-link callback. Deployments may add web callbacks through the
+    # environment variable; keep the native callback enabled by default.
+    'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': list(dict.fromkeys(
+        uri for uri in [
+            'interaims://oauth/google/callback',
+            f'{INTERA_IMS_FRONTEND_SITE_URL}/accounts/login/oauth2/code/google-oauth2/native'
+            if INTERA_IMS_FRONTEND_SITE_URL else '',
+            'https://dev.interaims.com/accounts/login/oauth2/code/google-oauth2/native',
+            f'{os.getenv("ADMIN_FRONTEND_SITE_URL", "").rstrip("/")}/accounts/login/oauth2/code/google-oauth2'
+            if os.getenv("ADMIN_FRONTEND_SITE_URL") else '',
+            *_split_csv_env('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', []),
+        ]
+        if uri
+    )),
     'PERMISSIONS': {
         'user_create': ['rest_framework.permissions.AllowAny'],
     },
@@ -409,6 +446,9 @@ PERMISSION_EVALUATION_SERVICE_KEY = os.getenv("PERMISSION_EVALUATION_SERVICE_KEY
 PERMISSION_EVALUATION_CACHE_TTL_SECONDS = int(os.getenv("PERMISSION_EVALUATION_CACHE_TTL_SECONDS", "3600"))
 
 WEBSOCKET_TICKET_LIFETIME_SECONDS = int(os.getenv('WEBSOCKET_TICKET_LIFETIME_SECONDS', '60'))
+TRUSTED_DEVICE_PRESENCE_TTL_SECONDS = int(
+    os.getenv('TRUSTED_DEVICE_PRESENCE_TTL_SECONDS', '120')
+)
 
 AUTH_COOKIE='accessToken'
 AUTH_REFRESH_COOKIE='refreshToken'
@@ -418,6 +458,8 @@ AUTH_COOKIE_SECURE=env_bool(os.getenv('AUTH_COOKIE_SECURE'), default=IS_PRODUCTI
 AUTH_COOKIE_HTTP_ONLY=True
 AUTH_COOKIE_PATH='/'
 AUTH_COOKIE_SAMESITE=os.getenv('AUTH_COOKIE_SAMESITE', 'Lax')
+AUTH_COOKIE_DOMAIN=os.getenv('AUTH_COOKIE_DOMAIN') or None
+ADMIN_FRONTEND_SITE_URL=os.getenv('ADMIN_FRONTEND_SITE_URL', '').rstrip('/')
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'mainapps.accounts.authentication.AccountJWTAuthentication',
@@ -463,6 +505,8 @@ CORS_ALLOW_HEADERS = [
     'x-intera-application',
     'x-frontend-origin',
     'x-device-id',
+    # Required by idempotent login and other retried mutation requests.
+    'idempotency-key',
 ]
 
 _default_cors_allowed_origins = [
@@ -478,11 +522,13 @@ _default_cors_allowed_origins = [
     'https://dev.product.interaims.com',
     'https://dev.inventory.interaims.com',
     'https://dev.pos.interaims.com',
-    'https://accounts.interaims.com',
-    'https://dev.accounts.interaims.com',
+    'https://users.api.interaims.com',
+    'https://users.dev.interaims.com',
     'https://www.interaims.com',
     'https://interaims.com',
     'https://dev.interaims.com',
+    'https://admin.dev.interaims.com',
+    'https://admin.interaims.com',
     'https://hosperator.com',
     'https://www.hosperator.com',
     'https://dev.hosperator.com',
@@ -490,12 +536,17 @@ _default_cors_allowed_origins = [
     'http://10.0.2.2:8080',
 
 ]
+if IS_PRODUCTION:
+    _default_cors_allowed_origins = [
+        origin for origin in _default_cors_allowed_origins
+        if origin.startswith("https://")
+    ]
 _configured_cors_allowed_origins = _split_csv_env("CORS_ALLOWED_ORIGINS", [])
 CORS_ALLOWED_ORIGINS = list(dict.fromkeys([*_default_cors_allowed_origins, *_configured_cors_allowed_origins]))
 
 _default_csrf_trusted_origins = sorted(set(CORS_ALLOWED_ORIGINS + [
-    "https://accounts.interaims.com",
-    "https://dev.accounts.interaims.com",
+    "https://users.api.interaims.com",
+    "https://users.dev.interaims.com",
     "http://10.0.2.2:3000",
     "http://10.0.2.2:8080",
 ]))

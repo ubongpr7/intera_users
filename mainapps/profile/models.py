@@ -858,6 +858,12 @@ class TrustedWorkspaceDevice(models.Model):
     )
     device_identifier = models.CharField(max_length=255, db_index=True)
     device_label = models.CharField(max_length=255, blank=True)
+    care_site_id = models.UUIDField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Opaque Hosperator Core care-site scope for this device binding.",
+    )
     capabilities = models.JSONField(
         default=list,
         blank=True,
@@ -881,6 +887,13 @@ class TrustedWorkspaceDevice(models.Model):
     )
     revoked_at = models.DateTimeField(null=True, blank=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
+    last_seen_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="trusted_workspace_devices_seen",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
