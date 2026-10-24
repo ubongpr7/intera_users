@@ -1,179 +1,97 @@
 from rest_framework import permissions
-import logging
 
-logger = logging.getLogger(__name__)
+from mainapps.accounts.authorization_context import evaluate_permission_grants
+from mainapps.common.settings import get_company_or_profile
+from mainapps.permit.models import PlatformChoices
+from mainapps.profile.support_access import validate_support_token
 
-from rest_framework_simplejwt.tokens import UntypedToken
-
-
-from django.db import transaction
-from rest_framework.response import Response
-from rest_framework import status
-from mainapps.management.models_activity.activity_logger import log_user_activity
-from mainapps.management.models_activity.changes import get_field_changes
-
-# from mainapps.management.models import ActivityLog  
-
-class ActivityTrackingMixin:
-    """
-    Mixin to log user activities for CRUD operations in ModelViewSets
-    """
-    
-    def log_activity(self, user, action, instance, details):
-        """
-        Helper method to create activity log
-        """
-        model_name = instance.__class__.__name__
-        object_id = instance.pk
-        
-        log_user_activity(
-            user=user,
-            action=action,
-            model_name=model_name,
-            object_id=object_id,
-            details=details,
-            instance=instance,
-            async_log=True
-        )
-    def get_request_metadata(self, request):
-        """Extracts common request metadata"""
-        return {
-            'ip_address': request.META.get('REMOTE_ADDR'),
-            'user_agent': request.META.get('HTTP_USER_AGENT')
-        }
-    
-    # def create(self, request, *args, **kwargs):
-    #     # Call the original create method
-    #     response = super().create(request, *args, **kwargs)
-        
-    #     # Only log if creation was successful (HTTP 201)
-    #     if response.status_code == status.HTTP_201_CREATED:
-    #         instance = self.get_queryset().get(pk=response.data['id'])
-            
-    #         # Log creation activity
-    #         metadata = self.get_request_metadata(request)
-    #         metadata['initial_data'] = request.data
-    #         metadata['created_data'] = response.data
-            
-    #         self.log_activity(
-    #             user=request.user,
-    #             action='CREATE',
-    #             instance=instance,
-    #             details=metadata
-    #         )
-        
-    #     return response
-    
-    # def update(self, request, *args, **kwargs):
-    #     # Get instance before update
-    #     instance = self.get_object()
-    #     old_data = self.get_serializer(instance).data
-        
-    #     # Call the original update method
-    #     response = super().update(request, *args, **kwargs)
-        
-    #     # Only log if update was successful (HTTP 200)
-    #     if response.status_code == status.HTTP_200_OK:
-    #         # Get updated instance
-    #         updated_instance = self.get_object()
-            
-    #         # Log update activity
-    #         metadata = self.get_request_metadata(request)
-    #         metadata['changes'] = get_field_changes(old_data, response.data)
-            
-    #         self.log_activity(
-    #             user=request.user,
-    #             action='UPDATE',
-    #             instance=updated_instance,
-    #             details=metadata
-    #         )
-        
-    #     return response
-    
-    
-    # def permissions(self, request, *args, **kwargs):
-    #     # Get instance before update
-    #     instance = self.get_object()
-    #     old_data = self.get_serializer(instance).data
-        
-    #     # Call the original update method
-    #     response = super().permissions(request, *args, **kwargs)
-        
-    #     # Only log if update was successful (HTTP 200)
-    #     if response.status_code == status.HTTP_200_OK:
-    #         # Get updated instance
-    #         updated_instance = self.get_object()
-            
-    #         # Log update activity
-    #         metadata = self.get_request_metadata(request)
-    #         metadata['changes'] = get_field_changes(old_data, response.data)
-            
-    #         self.log_activity(
-    #             user=request.user,
-    #             action='UPDATE',
-    #             instance=updated_instance,
-    #             details=metadata
-    #         )
-        
-    #     return response
-    
-    # def destroy(self, request, *args, **kwargs):
-    #     # Get instance before deletion
-    #     instance = self.get_object()
-    #     deleted_data = self.get_serializer(instance).data
-        
-    #     # Call the original destroy method
-    #     response = super().destroy(request, *args, **kwargs)
-        
-    #     # Only log if deletion was successful (HTTP 204)
-    #     if response.status_code == status.HTTP_204_NO_CONTENT:
-    #         # Log deletion activity
-    #         metadata = self.get_request_metadata(request)
-    #         metadata['deleted_data'] = deleted_data
-            
-    #         self.log_activity(
-    #             user=request.user,
-    #             action='DELETE',
-    #             instance=instance,
-    #             details=metadata
-    #         )
-        
-    #     return response
-    
 class HasModelRequestPermission(permissions.BasePermission):
     """
-    Microservice-adapted permission class that checks permissions via user service
+    Resolve management permissions from the Users source of record.
+
+    Detailed permission and wildcard claims are intentionally not read from the
+    access JWT or authorization context. Those claims can be stale and make the
+    token grow with every workspace assignment.
     """
-    def get_user_permissions(self, token_str):
-        try:
-            token= UntypedToken(token_str)
-            return set(token.payload.get('permissions')),token.payload.get('owner_id')
-        except Exception as e:
-            return {},False 
+    @staticmethod
+    def _resolve_required_permission(permission, request):
+        """Map shared management APIs to the active product's access permission."""
+        if permission != "manage_company_settings":
+            return permission
+        token = getattr(request, "auth", None)
+        payload = getattr(token, "payload", {}) if token is not None else {}
+        if payload.get("platform") == "hosperator":
+            return "hosperator.staff_access.manage"
+        return permission
+
     def has_permission(self, request, view):
         permission = getattr(view, 'required_permission', None)
-
         if not permission:
-            return True
-       
-        
-        
-        """Check if user has required permissions"""
-        auth_header=request.headers.get('Authorization')
-        if auth_header:
-            token_str=auth_header.split(' ')[1]
-            user_permissions,owner_id=self.get_user_permissions(token_str)
-                 
-            if owner_id == request.user.id:
+            return False
+
+        if isinstance(permission, dict):
+            action = getattr(view, "action", None)
+            permission = permission.get(action)
+            if not permission:
+                return False
+
+        permission = self._resolve_required_permission(permission, request)
+
+        if permission == "create_company":
+            profile_id = getattr(request.user, "profile_id", None)
+            memberships = getattr(request.user, "company_memberships", None)
+            has_memberships = bool(memberships.exists()) if memberships is not None and hasattr(memberships, "exists") else False
+            if not profile_id and not has_memberships:
                 return True
-            
-            if permission:
-            
-                if isinstance(permission, dict):
-                    action = view.action
-                    permission= permission.get(action)
-                return permission in user_permissions
-        return False
+
+        # Internal staff manage platform-owned definitions independently of a tenant role.
+        if getattr(request.user, "is_superuser", False) or getattr(request.user, "is_staff", False):
+            return True
+
+        token = getattr(request, "auth", None)
+        payload = getattr(token, "payload", {}) if token is not None else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        profile_id = payload.get("profile_id") or getattr(request.user, "profile_id", None)
+        support_access_grant_id = payload.get("support_access_grant_id")
+        if not validate_support_token(
+            request.user,
+            profile_id=profile_id,
+            support_access_grant_id=support_access_grant_id,
+        ):
+            return False
+
+        profile = get_company_or_profile(
+            request.user,
+            profile_id=profile_id,
+            support_access_grant_id=support_access_grant_id,
+        )
+        if not profile:
+            return False
+        if profile.owner_id == request.user.id and not support_access_grant_id:
+            return True
+        platform = payload.get("platform") or PlatformChoices.INTERA_IMS
+        if platform not in PlatformChoices.values:
+            return False
+        support_grant = None
+        if support_access_grant_id:
+            from mainapps.profile.support_access import get_active_support_grant
+
+            support_grant = get_active_support_grant(
+                request.user,
+                profile=profile,
+                grant_id=support_access_grant_id,
+            )
+            if not support_grant:
+                return False
+        grants = evaluate_permission_grants(
+            request.user,
+            profile=profile,
+            support_grant=support_grant,
+            platform=platform,
+            permissions=[permission],
+        )
+        return bool(grants.get(permission))
         
 class PermissionRequiredMixin:
     """

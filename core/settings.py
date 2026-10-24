@@ -1,26 +1,95 @@
 
 import os
+from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
+
+import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
+
+from core.security import env_bool, is_production_environment, validate_production_settings
 
 load_dotenv()
 
-LOCAL_SERVER = os.getenv('LOCAL_SERVER', 'False')=='True'
+LOCAL_SERVER = env_bool(os.getenv('LOCAL_SERVER'), default=False)
+IS_PRODUCTION = is_production_environment(os.getenv("DJANGO_ENV") or os.getenv("DEPLOYMENT_ENV"))
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _split_csv_env(var_name: str, default: list[str]) -> list[str]:
+    value = os.getenv(var_name, "").strip()
+    if not value:
+        return default
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 SECRET_KEY = os.getenv('SECRET_KEY')
 
-DEBUG = True
+if not SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY must be set.")
 
-ALLOWED_HOSTS = [
+DEBUG = env_bool(os.getenv('DEBUG'), default=False)
+DATABASE_CONN_MAX_AGE = int(os.getenv("DATABASE_CONN_MAX_AGE", "600"))
+DATABASE_CONN_HEALTH_CHECKS = os.getenv("DATABASE_CONN_HEALTH_CHECKS", "True") == "True"
+DATABASE_DISABLE_SERVER_SIDE_CURSORS = os.getenv("DATABASE_DISABLE_SERVER_SIDE_CURSORS", "True") == "True"
+DATABASE_CONNECT_TIMEOUT = int(os.getenv("DATABASE_CONNECT_TIMEOUT", "10"))
+
+# Logging
+# Django's default logging config won't show `logger.info(...)` from our modules unless you
+# define `LOGGING`. This ensures Kafka consumers/producers log to stdout (Docker logs).
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+DJANGO_LOG_LEVEL = os.getenv("DJANGO_LOG_LEVEL", LOG_LEVEL).upper()
+KAFKA_LOG_LEVEL = os.getenv("KAFKA_LOG_LEVEL", LOG_LEVEL).upper()
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "console": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "console",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": LOG_LEVEL,
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": DJANGO_LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": ["console"],
+            "level": DJANGO_LOG_LEVEL,
+            "propagate": False,
+        },
+        "subapps.kafka": {
+            "handlers": ["console"],
+            "level": KAFKA_LOG_LEVEL,
+            "propagate": False,
+        },
+    },
+}
+
+_default_allowed_hosts = [
     'localhost',
     '127.0.0.1',
-    'dev.accounts.interaims.com',
+    '10.0.2.2',
+    'users.api.interaims.com',
+    'users.dev.interaims.com',
     'host.docker.internal'
     
 ]
+ALLOWED_HOSTS = _split_csv_env("ALLOWED_HOSTS", _default_allowed_hosts)
 # ALLOWED_HOSTS = ['*']
 
 # Application definition
@@ -37,6 +106,7 @@ THIRD_PARTY_APPS=[
      "rest_framework",
     "rest_framework.authtoken",
     'corsheaders',
+    'cities_light',
     'whitenoise.runserver_nostatic',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
@@ -49,7 +119,8 @@ THIRD_PARTY_APPS=[
 CORE_APPS = [
     'mainapps.accounts',
     'mainapps.common',
-    'mainapps.management',
+    'mainapps.kafka_reliability',
+    'mainapps.profile',
     'mainapps.permit',
 ]
 
@@ -89,25 +160,17 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
+DATABASES = {
+    'default': dj_database_url.config(
+        default=os.getenv('DATABASE_URL'),
+        conn_max_age=DATABASE_CONN_MAX_AGE,
+        conn_health_checks=DATABASE_CONN_HEALTH_CHECKS,
+    )
+}
 
-if LOCAL_SERVER:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME'),
-            'USER': os.getenv('DB_USER'),
-            'PASSWORD': os.getenv('DB_PASSWORD'),
-            'HOST': os.getenv('DB_HOST'),
-            'PORT': os.getenv('DB_PORT'),
-        }
-    }
+DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = DATABASE_DISABLE_SERVER_SIDE_CURSORS
+if DATABASE_CONNECT_TIMEOUT > 0:
+    DATABASES["default"].setdefault("OPTIONS", {})["connect_timeout"] = DATABASE_CONNECT_TIMEOUT
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -146,13 +209,96 @@ MEDIA_URL = '/media/'
 MEDIAFILES_DIRS=[os.path.join(BASE_DIR,'media')]
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-EMAIL_BACKEND = 'django_smtp_ssl.SSLEmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 465  
-EMAIL_USE_SSL = True
-EMAIL_USE_TLS = False
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django_smtp_ssl.SSLEmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "465"))
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "True") == "True"
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "False") == "True"
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD =os.getenv('EMAIL_HOST_PASSWORD')
+EMAIL_SUPPORT_EMAIL = os.getenv("EMAIL_SUPPORT_EMAIL", "support@interaims.com").strip()
+EMAIL_NOREPLY_ADDRESS = os.getenv("EMAIL_NOREPLY_ADDRESS", "noreply@interaims.com").strip()
+EMAIL_ACCOUNTS_ADDRESS = os.getenv("EMAIL_ACCOUNTS_ADDRESS", "intera-accounts@interaims.com").strip()
+EMAIL_AGENT_ADDRESS = os.getenv("EMAIL_AGENT_ADDRESS", "intera-agent@interaims.com").strip()
+EMAIL_SYSTEM_FROM_EMAIL = os.getenv("EMAIL_SYSTEM_FROM_EMAIL", f"Intera IMS <{EMAIL_NOREPLY_ADDRESS}>").strip()
+EMAIL_ACCOUNTS_FROM_EMAIL = os.getenv("EMAIL_ACCOUNTS_FROM_EMAIL", f"Intera Accounts <{EMAIL_ACCOUNTS_ADDRESS}>").strip()
+EMAIL_AGENT_FROM_EMAIL = os.getenv("EMAIL_AGENT_FROM_EMAIL", f"Intera Agent <{EMAIL_AGENT_ADDRESS}>").strip()
+EMAIL_DEFAULT_REPLY_TO = os.getenv("EMAIL_DEFAULT_REPLY_TO", EMAIL_SUPPORT_EMAIL).strip()
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    EMAIL_SYSTEM_FROM_EMAIL,
+).strip()
+EMAIL_BRAND_LOGO_URL = os.getenv("EMAIL_BRAND_LOGO_URL", "").strip()
+EMAIL_BRAND_LOGO_LIGHT_URL = os.getenv("EMAIL_BRAND_LOGO_LIGHT_URL", "").strip()
+EMAIL_BRAND_LOGO_DARK_URL = os.getenv("EMAIL_BRAND_LOGO_DARK_URL", "").strip()
+EMAIL_BRAND_STATIC_LOGO_PATH = "images/logos/INTERA-EMAIL-LOGO-DARK.png"
+EMAIL_SHARED_STATIC_BUCKET = os.getenv("EMAIL_SHARED_STATIC_BUCKET", os.getenv("AWS_STORAGE_BUCKET_NAME", "")).strip()
+EMAIL_SHARED_STATIC_LOCATION = os.getenv(
+    "EMAIL_SHARED_STATIC_LOCATION",
+    os.getenv("AWS_STATIC_LOCATION", "assessment/static"),
+).strip("/")
+COMPANY_INVITATION_EXPIRY_DAYS = int(os.getenv("COMPANY_INVITATION_EXPIRY_DAYS", "2"))
+SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
+FRONTEND_SITE_URL = os.getenv("FRONTEND_SITE_URL", SITE_URL).strip().rstrip("/")
+INTERA_IMS_FRONTEND_SITE_URL = os.getenv("INTERA_IMS_FRONTEND_SITE_URL", FRONTEND_SITE_URL).strip().rstrip("/")
+HOSPERATOR_FRONTEND_SITE_URL = os.getenv(
+    "HOSPERATOR_FRONTEND_SITE_URL",
+    FRONTEND_SITE_URL,
+).strip().rstrip("/")
+
+# social-auth uses provider-specific setting names. Keep the existing Google
+# environment names as the public contract and map them here so local and
+# deployed environments behave identically.
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.getenv(
+    "SOCIAL_AUTH_GOOGLE_OAUTH2_KEY",
+    os.getenv("GOOGLE_CLIENT_ID", ""),
+).strip()
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.getenv(
+    "SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET",
+    os.getenv("GOOGLE_CLIENT_SECRET", ""),
+).strip()
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = ["openid", "email", "profile"]
+
+_default_frontend_action_allowed_origins = [
+    FRONTEND_SITE_URL,
+    INTERA_IMS_FRONTEND_SITE_URL,
+    HOSPERATOR_FRONTEND_SITE_URL,
+    SITE_URL,
+    "http://localhost:3000",
+    "http://localhost:3005",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3005",
+    "https://interaims.com",
+    "https://www.interaims.com",
+    "https://dev.interaims.com",
+    "https://hosperator.com",
+    "https://www.hosperator.com",
+    "https://dev.hosperator.com",
+]
+FRONTEND_ACTION_ALLOWED_ORIGINS = _split_csv_env(
+    "FRONTEND_ACTION_ALLOWED_ORIGINS",
+    [origin for origin in _default_frontend_action_allowed_origins if origin],
+)
+COMPANY_INVITATION_ACCEPT_URL_TEMPLATE = os.getenv("COMPANY_INVITATION_ACCEPT_URL_TEMPLATE", "").strip()
+COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_INTERA_IMS = os.getenv(
+    "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_INTERA_IMS",
+    COMPANY_INVITATION_ACCEPT_URL_TEMPLATE,
+).strip()
+COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR = os.getenv(
+    "COMPANY_INVITATION_ACCEPT_URL_TEMPLATE_HOSPERATOR",
+    "",
+).strip()
+SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_INTERA_IMS = os.getenv(
+    "SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_INTERA_IMS",
+    os.getenv("SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE", ""),
+).strip()
+SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_HOSPERATOR = os.getenv(
+    "SUPPORT_ACCESS_ACCEPT_URL_TEMPLATE_HOSPERATOR",
+    "",
+).strip()
+_frontend_site = urlparse(FRONTEND_SITE_URL) if FRONTEND_SITE_URL else None
+EMAIL_FRONTEND_PROTOCOL = (_frontend_site.scheme if _frontend_site and _frontend_site.scheme else "").strip() or None
+EMAIL_FRONTEND_DOMAIN = (_frontend_site.netloc if _frontend_site and _frontend_site.netloc else "").strip() or None
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
     
@@ -169,8 +315,53 @@ AUTHENTICATION_BACKENDS = [
 
     'django.contrib.auth.backends.ModelBackend',
 ]
-import os
-from datetime import timedelta
+
+# Keep password authentication and MFA behavior unchanged while allowing a
+# verified Google identity to link to an existing email/password account.
+SOCIAL_AUTH_PIPELINE = (
+    'social_core.pipeline.social_auth.social_details',
+    'social_core.pipeline.social_auth.social_uid',
+    'social_core.pipeline.social_auth.auth_allowed',
+    'social_core.pipeline.social_auth.social_user',
+    'social_core.pipeline.user.get_username',
+    'mainapps.accounts.social_pipeline.associate_verified_google_by_email',
+    'social_core.pipeline.user.create_user',
+    'social_core.pipeline.social_auth.associate_user',
+    'social_core.pipeline.social_auth.load_extra_data',
+    'mainapps.accounts.social_pipeline.preserve_existing_user_details',
+)
+
+# Provider profile data must not replace the name an existing Intera IMS user
+# has already chosen. This applies to every social-auth pipeline branch,
+# including accounts that already have a Google social-auth association.
+SOCIAL_AUTH_PROTECTED_USER_FIELDS = (
+    'first_name',
+    'last_name',
+)
+
+
+def _read_key_from_env(value_var: str) -> str | None:
+    """Read a PEM key from a raw environment variable."""
+    key_value = os.getenv(value_var)
+    if key_value:
+        return key_value.replace("\\n", "\n")
+    return None
+
+
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "RS256")
+JWT_SIGNING_KEY_ID = os.getenv("JWT_SIGNING_KEY_ID", "users-primary")
+JWT_SIGNING_KEY = _read_key_from_env("JWT_PRIVATE_KEY")
+JWT_VERIFYING_KEY = _read_key_from_env("JWT_PUBLIC_KEY")
+
+if JWT_ALGORITHM.upper().startswith(("RS", "ES")):
+    if not JWT_SIGNING_KEY:
+        raise ImproperlyConfigured(
+            "JWT_PRIVATE_KEY must be set when using RS/ES algorithms."
+        )
+    if not JWT_VERIFYING_KEY:
+        raise ImproperlyConfigured(
+            "JWT_PUBLIC_KEY must be set when using RS/ES algorithms."
+        )
 
 # DJOSER CONFIGURATION
 DJOSER = {
@@ -181,11 +372,36 @@ DJOSER = {
     'USER_CREATE_PASSWORD_RETYPE': True,
     'PASSWORD_RESET_CONFIRM_RETYPE': True,
     'LOGOUT_ON_PASSWORD_CHANGE': True,
-    # 'EMAIL_FRONTEND_DOMAIN':'localhost:3000',
-    # 'EMAIL_FRONTEND_PROTOCOL':'http',
+    'EMAIL_FRONTEND_DOMAIN': EMAIL_FRONTEND_DOMAIN,
+    'EMAIL_FRONTEND_PROTOCOL': EMAIL_FRONTEND_PROTOCOL,
+    'EMAIL_FRONTEND_SITE_NAME': 'Intera IMS',
+    'EMAIL': {
+        'activation': 'mainapps.accounts.emails.InteraActivationEmail',
+        'password_reset': 'mainapps.accounts.emails.InteraPasswordResetEmail',
+    },
     'TOKEN_MODEL': 'rest_framework.authtoken.models.Token',  
+    'SERIALIZERS': {
+        'user_create': 'mainapps.accounts.serializers.UserCreateSerializer',
+    },
 
-    'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': os.getenv('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', '').split(','),
+    # The native Kotlin client completes the OAuth exchange after receiving
+    # this deep-link callback. Deployments may add web callbacks through the
+    # environment variable; keep the native callback enabled by default.
+    'SOCIAL_AUTH_ALLOWED_REDIRECT_URIS': list(dict.fromkeys(
+        uri for uri in [
+            'interaims://oauth/google/callback',
+            f'{INTERA_IMS_FRONTEND_SITE_URL}/accounts/login/oauth2/code/google-oauth2/native'
+            if INTERA_IMS_FRONTEND_SITE_URL else '',
+            'https://dev.interaims.com/accounts/login/oauth2/code/google-oauth2/native',
+            f'{os.getenv("ADMIN_FRONTEND_SITE_URL", "").rstrip("/")}/accounts/login/oauth2/code/google-oauth2'
+            if os.getenv("ADMIN_FRONTEND_SITE_URL") else '',
+            *_split_csv_env('SOCIAL_AUTH_ALLOWED_REDIRECT_URIS', []),
+        ]
+        if uri
+    )),
+    'PERMISSIONS': {
+        'user_create': ['rest_framework.permissions.AllowAny'],
+    },
 }
 
 
@@ -195,13 +411,16 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
-    'ALGORITHM': 'HS256',
-    'VERIFYING_KEY': None,
-    'AUDIENCE': None,
-    'ISSUER': None,
-    'JWK_URL': None,
+    'ALGORITHM': JWT_ALGORITHM,
+    'SIGNING_KEY': JWT_SIGNING_KEY if JWT_SIGNING_KEY else SECRET_KEY,
+    'VERIFYING_KEY': JWT_VERIFYING_KEY,
+    # Treat empty strings as unset so we don't enforce/emit `aud`/`iss` with "".
+    'AUDIENCE': os.getenv("JWT_AUDIENCE") or None,
+    'ISSUER': os.getenv("JWT_ISSUER") or None,
+    'JWK_URL': os.getenv("JWT_JWK_URL") or None,
     'LEEWAY': 0,
-    "TOKEN_OBTAIN_SERIALIZER": "mainapps.accounts.api.serializers.MyTokenObtainPairSerializer",
+    "TOKEN_OBTAIN_SERIALIZER": "mainapps.accounts.serializers.MyTokenObtainPairSerializer",
+    "TOKEN_REFRESH_SERIALIZER": "mainapps.accounts.serializers.TokenRefreshSerializer",
 
     'AUTH_HEADER_TYPES': ('Bearer',),
     'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
@@ -219,24 +438,46 @@ SIMPLE_JWT = {
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
-AUTH_COOKIE='access'
+AUTHORIZATION_CONTEXT_EMBED_PERMISSION_CLAIMS = env_bool(
+    os.getenv("AUTHORIZATION_CONTEXT_EMBED_PERMISSION_CLAIMS"),
+    default=False,
+)
+PERMISSION_EVALUATION_SERVICE_KEY = os.getenv("PERMISSION_EVALUATION_SERVICE_KEY", "")
+PERMISSION_EVALUATION_CACHE_TTL_SECONDS = int(os.getenv("PERMISSION_EVALUATION_CACHE_TTL_SECONDS", "3600"))
+
+WEBSOCKET_TICKET_LIFETIME_SECONDS = int(os.getenv('WEBSOCKET_TICKET_LIFETIME_SECONDS', '60'))
+TRUSTED_DEVICE_PRESENCE_TTL_SECONDS = int(
+    os.getenv('TRUSTED_DEVICE_PRESENCE_TTL_SECONDS', '120')
+)
+
+AUTH_COOKIE='accessToken'
+AUTH_REFRESH_COOKIE='refreshToken'
 AUTH_COOKIE_ACCESS_MAX_AGE=60*10
 AUTH_COOKIE_REFRESH_MAX_AGE=60*60*24
-AUTH_COOKIE_SECURE=False 
+AUTH_COOKIE_SECURE=env_bool(os.getenv('AUTH_COOKIE_SECURE'), default=IS_PRODUCTION)
 AUTH_COOKIE_HTTP_ONLY=True
 AUTH_COOKIE_PATH='/'
-AUTH_COOKIE_SAMESITE='None'
+AUTH_COOKIE_SAMESITE=os.getenv('AUTH_COOKIE_SAMESITE', 'Lax')
+AUTH_COOKIE_DOMAIN=os.getenv('AUTH_COOKIE_DOMAIN') or None
+ADMIN_FRONTEND_SITE_URL=os.getenv('ADMIN_FRONTEND_SITE_URL', '').rstrip('/')
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'mainapps.accounts.authentication.AccountJWTAuthentication',
         # 'rest_framework_simplejwt.authentication.JWTStatelessUserAuthentication',
-    )
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': os.getenv('ANON_RATE_LIMIT', '20/minute'),
+        'user': os.getenv('USER_RATE_LIMIT', '120/minute'),
+    },
 }
 
-CORS_ALLOW_ALL_ORIGINS=True
-CORS_ORIGIN_ALLOW_ALL=True
+CORS_ALLOW_ALL_ORIGINS=env_bool(os.getenv('CORS_ALLOW_ALL_ORIGINS'), default=False)
+CORS_ORIGIN_ALLOW_ALL=CORS_ALLOW_ALL_ORIGINS
 
-CORS_ALLOW_CREDENTIALS=True
+CORS_ALLOW_CREDENTIALS=os.getenv('CORS_ALLOW_CREDENTIALS', 'True')=='True'
 CORS_ALLOW_METHODS = (
     "DELETE",
     "GET",
@@ -257,12 +498,23 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
     'X-profile-id',  
+    'x-intera-authorization-context',
+    'x-intera-frontend-origin',
+    'x-intera-product',
+    'x-intera-product-context',
+    'x-intera-application',
+    'x-frontend-origin',
+    'x-device-id',
+    # Required by idempotent login and other retried mutation requests.
+    'idempotency-key',
 ]
 
-CORS_ALLOWED_ORIGINS = [
+_default_cors_allowed_origins = [
     "http://localhost:3000",
+    "http://localhost:3005",
     "http://localhost:8001",
     "http://127.0.0.1:3000",
+    "http://127.0.0.1:3005",
     'http://3.212.68.52:3000',
     "https://intera-inventory.vercel.app",
     "http://3.84.22.207:3000",
@@ -270,39 +522,124 @@ CORS_ALLOWED_ORIGINS = [
     'https://dev.product.interaims.com',
     'https://dev.inventory.interaims.com',
     'https://dev.pos.interaims.com',
+    'https://users.api.interaims.com',
+    'https://users.dev.interaims.com',
     'https://www.interaims.com',
     'https://interaims.com',
+    'https://dev.interaims.com',
+    'https://admin.dev.interaims.com',
+    'https://admin.interaims.com',
+    'https://hosperator.com',
+    'https://www.hosperator.com',
+    'https://dev.hosperator.com',
+    'http://10.0.2.2:3000',
+    'http://10.0.2.2:8080',
 
 ]
+if IS_PRODUCTION:
+    _default_cors_allowed_origins = [
+        origin for origin in _default_cors_allowed_origins
+        if origin.startswith("https://")
+    ]
+_configured_cors_allowed_origins = _split_csv_env("CORS_ALLOWED_ORIGINS", [])
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys([*_default_cors_allowed_origins, *_configured_cors_allowed_origins]))
+
+_default_csrf_trusted_origins = sorted(set(CORS_ALLOWED_ORIGINS + [
+    "https://users.api.interaims.com",
+    "https://users.dev.interaims.com",
+    "http://10.0.2.2:3000",
+    "http://10.0.2.2:8080",
+]))
+CSRF_TRUSTED_ORIGINS = _split_csv_env("CSRF_TRUSTED_ORIGINS", _default_csrf_trusted_origins)
 
 
-# SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False')=='True'
+SECURE_SSL_REDIRECT = env_bool(os.getenv('SECURE_SSL_REDIRECT'), default=IS_PRODUCTION)
 
-SECURE_PROXY_SSL_HEADER=None
-SESSION_COOKIE_SECURE = False
+SECURE_PROXY_SSL_HEADER = (
+    ('HTTP_X_FORWARDED_PROTO', 'https')
+    if os.getenv('SECURE_PROXY_SSL_HEADER_ENABLED', 'False') == 'True'
+    else None
+)
+SESSION_COOKIE_SECURE = env_bool(os.getenv('SESSION_COOKIE_SECURE'), default=IS_PRODUCTION)
 
-CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', 'False')=='True'
+CSRF_COOKIE_SECURE = env_bool(os.getenv('CSRF_COOKIE_SECURE'), default=IS_PRODUCTION)
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000" if IS_PRODUCTION else "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool(os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS"), default=IS_PRODUCTION)
+SECURE_HSTS_PRELOAD = env_bool(os.getenv("SECURE_HSTS_PRELOAD"), default=IS_PRODUCTION)
+
+if DEBUG or LOCAL_SERVER:
+    SECURE_SSL_REDIRECT = False
+    SECURE_PROXY_SSL_HEADER = None
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    AUTH_COOKIE_SECURE = False
+    SECURE_HSTS_SECONDS = 0
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
+
+if IS_PRODUCTION:
+    validate_production_settings(
+        debug=DEBUG,
+        local_server=LOCAL_SERVER,
+        allowed_hosts=ALLOWED_HOSTS,
+        cors_allow_all=CORS_ALLOW_ALL_ORIGINS,
+        cors_allowed_origins=CORS_ALLOWED_ORIGINS,
+        csrf_trusted_origins=CSRF_TRUSTED_ORIGINS,
+        secure_ssl_redirect=SECURE_SSL_REDIRECT,
+        session_cookie_secure=SESSION_COOKIE_SECURE,
+        csrf_cookie_secure=CSRF_COOKIE_SECURE,
+        auth_cookie_secure=AUTH_COOKIE_SECURE,
+        hsts_seconds=SECURE_HSTS_SECONDS,
+    )
 FILE_UPLOAD_TIMEOUT = 3600
 DATA_UPLOAD_MAX_MEMORY_SIZE = 2147483648  # 2GB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 2147483648  # 2GB
 
-"""
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
 CACHES = {
     "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://redis:6379/",
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        }
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.getenv("DJANGO_CACHE_URL", REDIS_URL),
     }
 }
-"""
 
-CELERY_BROKER_URL = 'redis://redis:6379/0'
-CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
+# S3 Configuration
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
+AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME')
+AWS_STATIC_LOCATION = os.getenv('AWS_STATIC_LOCATION', 'assessment/static')
+AWS_S3_CUSTOM_DOMAIN = "%s.s3.amazonaws.com" % AWS_STORAGE_BUCKET_NAME
+AWS_S3_CONNECT_TIMEOUT = 10  
+AWS_S3_TIMEOUT = 60 
+AWS_S3_FILE_OVERWRITE = True
+
+
+if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_STORAGE_BUCKET_NAME:
+
+    STORAGES = {
+        "default": {"BACKEND": "storages.backends.s3boto3.S3Boto3Storage"},
+        "staticfiles": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+            "OPTIONS": {"location": AWS_STATIC_LOCATION},
+        },
+    }
+    STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_STATIC_LOCATION}/"
+
+if not EMAIL_BRAND_LOGO_URL and EMAIL_SHARED_STATIC_BUCKET:
+    EMAIL_BRAND_LOGO_URL = (
+        f"https://{EMAIL_SHARED_STATIC_BUCKET}.s3.amazonaws.com/"
+        f"{EMAIL_SHARED_STATIC_LOCATION}/{EMAIL_BRAND_STATIC_LOGO_PATH}"
+    )
+elif not EMAIL_BRAND_LOGO_URL:
+    EMAIL_BRAND_LOGO_URL = f"{STATIC_URL.rstrip('/')}/{EMAIL_BRAND_STATIC_LOGO_PATH}"
+
+
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
 USE_L10N = True
 USE_THOUSAND_SEPARATOR = True
 
-# SERVICES
-COMMON_SERVICE_URL=os.getenv('COMMON_SERVICE_URL')
+# INTER SERVICE COMMUNICATION
+KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')

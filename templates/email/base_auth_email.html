@@ -1,0 +1,79 @@
+{% block subject %}{% endblock %}
+{% block text_body %}{% endblock %}
+{% block html_body %}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <meta name="supported-color-schemes" content="light dark">
+    <title>{% block auth_email_title %}{{ brand_name|default:"Intera IMS" }}{% endblock %}</title>
+    <style>
+      .brand-logo { display: block; width: 176px; max-width: 176px; height: auto; border: 0; outline: none; text-decoration: none; }
+      .brand-text { display: inline-block; padding: 8px 12px; border: 1px solid rgba(255,255,255,0.2); border-radius: 999px; color: #ffffff; font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; }
+      @media (prefers-color-scheme: dark) {
+        .email-page { background: #101727 !important; }
+        .email-card { background: #151f33 !important; border-color: #27364f !important; }
+        .email-panel { background: #101727 !important; border-color: #27364f !important; }
+        .email-heading { color: #ffffff !important; }
+        .email-copy { color: #d1d5db !important; }
+      }
+    </style>
+  </head>
+  <body style="margin: 0; padding: 0; background: #f5f9ff;">
+    <div style="display: none; max-height: 0; overflow: hidden; opacity: 0; color: transparent;">
+      {% block auth_email_preheader %}{{ brand_name|default:"Intera IMS" }}{% endblock %}
+    </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" class="email-page" style="background: #f5f9ff; padding: 36px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="720" cellspacing="0" cellpadding="0" class="email-card" style="max-width: 720px; width: 100%; overflow: hidden; background: #ffffff; border: 1px solid #d9e6ff; border-radius: 26px; box-shadow: 0 18px 48px rgba(16, 23, 39, 0.10);">
+            <tr>
+              <td style="padding: 42px 48px; background: #101727; color: #ffffff;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                  <tr>
+                    <td style="vertical-align: middle;">
+                      {% include "emails/partials/header.html" %}
+                    </td>
+                    <td style="text-align: right; vertical-align: middle;">
+                      <div style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #98fcc2;">
+                        {% block email_eyebrow %}Account Security{% endblock %}
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 42px 48px 16px;">
+                <h1 class="email-heading" style="margin: 0 0 16px; font-family: Arial, Helvetica, sans-serif; color: #101727; font-size: 32px; line-height: 1.18; letter-spacing: -0.02em;">
+                  {% block auth_email_heading %}{{ brand_name|default:"Intera IMS" }}{% endblock %}
+                </h1>
+                {% block email_content %}{% endblock %}
+                {% block email_cta %}{% endblock %}
+              </td>
+            </tr>
+            {% block email_support_panel %}
+            <tr>
+              <td style="padding: 8px 48px 32px;">
+                <div class="email-panel" style="padding: 16px 18px; border-radius: 18px; background: #f5f9ff; border: 1px solid #d9e6ff;">
+                  <p class="email-copy" style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.6; color: #5c6c86;">
+                    {% block email_support_copy %}If you did not expect this email, you can safely ignore it.{% endblock %}
+                  </p>
+                </div>
+              </td>
+            </tr>
+            {% endblock %}
+            <tr>
+              <td style="padding: 0 48px 36px; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.6; color: #6b7280;">
+                {% block email_footer %}{% include "emails/partials/footer.html" %}{% endblock %}
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+{% endblock html_body %}

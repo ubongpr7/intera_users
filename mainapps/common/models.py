@@ -3,6 +3,7 @@ from django.utils.translation import gettext_lazy as _
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from datetime import datetime
 
 
 from mptt.models import MPTTModel, TreeForeignKey
@@ -14,8 +15,14 @@ from django.core.validators import RegexValidator
 from django.core.exceptions import ValidationError
 
 class Address(models.Model):
-
-    
+    shared_address_id = models.UUIDField(
+        null=True,
+        blank=True,
+        db_index=True,
+        editable=False,
+        verbose_name=_('Shared address ID'),
+        help_text=_('Opaque address ID owned by the shared locations service.'),
+    )
     country = models.CharField(
         max_length=255,
         verbose_name=_('Country'),
@@ -79,13 +86,34 @@ class Address(models.Model):
         null=True,
         blank=True
     )
+    class Meta:
+        abstract = True
+
 
     def __str__(self):
         return f'{self.street}, {self.city}, {self.region}, {self.country}'
 
-def attachment_upload_path(instance, filename):
-    return f'attachments/{instance.attachment.content_type.model}/{instance.attachment.object_id}/{instance.attachment.id}/{instance.id}/{filename}'
 
+class SharedAddressMigrationMap(models.Model):
+    source_model = models.CharField(max_length=120)
+    source_pk = models.CharField(max_length=64)
+    profile_id = models.CharField(max_length=128, blank=True, default='')
+    shared_address_id = models.UUIDField(null=True, blank=True, db_index=True)
+    status = models.CharField(max_length=20, default='pending')
+    error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['source_model', 'source_pk'],
+            name='common_shared_address_source_unique',
+        )]
+        ordering = ['source_model', 'source_pk']
+
+def attachment_upload_path(instance, filename):
+    timestamp = datetime.now().strftime("%y%m%d%H%M%S")
+    return f"attachments/{instance.attachment.content_type.model}/{instance.attachment.object_id}/{timestamp}-{filename}"
 class Attachment(models.Model):
     FILE_TYPES = (
         ('IMAGE', 'Image'),
@@ -134,4 +162,39 @@ class Attachment(models.Model):
         return f"{self.get_file_type_display()} for {self.content_object}"
 
 
+class Unit(models.Model):
+    class DimensionType(models.TextChoices):
+        MASS = "MASS", _("Mass")
+        VOLUME = "VOLUME", _("Volume")
+        LENGTH = "LENGTH", _("Length")
+        PIECE = "PIECE", _("Piece")
+        TIME = "TIME", _("Time")
+        CUSTOM = "CUSTOM", _("Custom")
+
+    name = models.CharField(max_length=100)
+    abbreviated_name = models.CharField(max_length=20)
+    dimension_type = models.CharField(max_length=20, choices=DimensionType.choices)
+    base_unit = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="derived_units",
+    )
+    conversion_factor = models.FloatField(default=1.0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["dimension_type", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dimension_type", "name"],
+                name="common_unit_dimension_name_unique",
+            )
+        ]
+        verbose_name = _("Unit")
+        verbose_name_plural = _("Units")
+
+    def __str__(self):
+        return f"{self.name} ({self.dimension_type})"
 

@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django.http import JsonResponse
+from django.db import connection
 from django.urls import path,include
 from django.urls import re_path
 from rest_framework import permissions
@@ -15,21 +17,37 @@ schema_view = get_schema_view(
    openapi.Info(
       title="Intera API Users",
       default_version='v1',
-      description="Test description",
-      terms_of_service="https://www.google.com/policies/terms/",
-      contact=openapi.Contact(email="contact@snippets.local"),
-      license=openapi.License(name="BSD License"),
+      description="Authentication, MFA, workspace, staff, roles, groups, permissions, and shared identity APIs for Intera.",
+      contact=openapi.Contact(email="platform@intera.technology"),
    ),
    public=True,
    permission_classes=(permissions.AllowAny,),
 )
 
+
+def healthz(_request):
+    return JsonResponse({"status": "ok"})
+
+
+def readyz(_request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except Exception as exc:
+        return JsonResponse(
+            {"status": "error", "database": "unavailable", "error": type(exc).__name__},
+            status=503,
+        )
+    return JsonResponse({"status": "ok", "database": "available"})
+
 urlpatterns = [
     path('admin/', admin.site.urls),
-    # djoser urls
-    path('auth-api/', include('djoser.urls')),
-    path('', include('djoser.urls.jwt')),
-
+    path('healthz/', healthz, name='healthz'),
+    path('readyz/', readyz, name='readyz'),
+    path('djoser/', include('djoser.urls'), name='djoser_users'),
+    path('auth/', include("mainapps.accounts.jwt_urls")),
+    path('accounts/', include("mainapps.accounts.urls")),
     #  api endpoints docs
     path('swagger<format>/', schema_view.without_ui(cache_timeout=0), name='schema-json'),
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
@@ -37,11 +55,7 @@ urlpatterns = [
     path("schema/", Schema.as_view()),
 
     # db sync
-    path('api/v1/accounts/', include("mainapps.accounts.api.urls")),
     path('permission_api/', include("mainapps.permit.api.urls",)),
-    path('management/', include("mainapps.management.urls")),
-    path('common_api/', include("mainapps.common.api.urls")),
-    
+    path('management/', include("mainapps.profile.urls")),
+    path('common/', include("mainapps.common.urls")),
 ]
-
-

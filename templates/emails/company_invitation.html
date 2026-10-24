@@ -1,0 +1,28 @@
+{% extends "emails/intera_email_base.html" %}
+
+{% block eyebrow %}Company Invitation{% endblock %}
+{% block title %}Join {{ company_name }}{% endblock %}
+
+{% block content %}
+<p><strong>{{ invited_by_email }}</strong> invited you to join <strong>{{ company_name }}</strong> as <strong>{{ role_label }}</strong>.</p>
+
+{% if invitation_message %}
+<p>{{ invitation_message }}</p>
+{% endif %}
+
+<div class="summary">
+    <span class="summary-label">Invite email</span>
+    <div class="summary-value">{{ recipient_email }}</div>
+    <span class="summary-label">Expires on</span>
+    <div class="summary-value">{{ expires_at|date:"M j, Y g:i A T" }}</div>
+</div>
+
+{% if accept_url %}
+<p><a class="cta" href="{{ accept_url }}">Review invitation</a></p>
+<p>Sign in with <strong>{{ recipient_email }}</strong> to accept or decline this invite.</p>
+<p>If the button does not open correctly, copy and paste this link into your browser:</p>
+<a class="fallback-link" href="{{ accept_url }}">{{ accept_url }}</a>
+{% else %}
+<p>This invitation link is not configured yet. Set the frontend site URL in the user service environment so invitation emails can open the app directly.</p>
+{% endif %}
+{% endblock %}

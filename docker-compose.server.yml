@@ -1,0 +1,67 @@
+name: interaims-dev-users
+
+x-service: &service
+  build:
+    context: .
+  env_file:
+    - .env
+  restart: unless-stopped
+  networks:
+    - platform
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  migrate:
+    <<: *service
+    restart: "no"
+    profiles: ["release"]
+    # Release deployments always reconcile the permission catalog and the
+    # universal role/group presets after schema migrations. These commands are
+    # idempotent, so missing permissions are created without duplicating or
+    # replacing workspace-specific assignments.
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py migrate --noinput &&
+        python manage.py populate_permissions &&
+        python manage.py setup_default_roles --platform intera_ims &&
+        python manage.py setup_default_groups --platform intera_ims &&
+        python manage.py setup_default_roles --platform hosperator &&
+        python manage.py setup_default_groups --platform hosperator &&
+        python manage.py invalidate_permission_cache
+
+  web:
+    <<: *service
+    container_name: interaims-dev-users-web
+    command: ["sh", "-c", "exec uvicorn core.asgi:application --host 0.0.0.0 --port 7001 --workers $${WEB_CONCURRENCY:-2}"]
+    expose:
+      - "7001"
+
+  consumer:
+    <<: *service
+    container_name: interaims-dev-users-consumer
+    command: ["sh", "-c", "python manage.py consume_kafka"]
+
+  outbox:
+    <<: *service
+    container_name: interaims-dev-users-outbox
+    command: ["sh", "-c", "python manage.py publish_outbox_events"]
+
+  mcp:
+    <<: *service
+    container_name: interaims-dev-users-mcp
+    command: ["sh", "-c", "python -m mcp_server.server"]
+    expose:
+      - "8000"
+    depends_on:
+      - web
+
+networks:
+  platform:
+    external: true
+    name: interaims-platform

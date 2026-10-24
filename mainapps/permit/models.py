@@ -11,15 +11,32 @@ class ServiceChoices(models.TextChoices):
     # product_inventory='product_inventory',_('Product inventory') 
 
 
+class PlatformChoices(models.TextChoices):
+    INTERA_IMS = "intera_ims", _("Intera IMS")
+    HOSPERATOR = "hosperator", _("Hosperator")
+
+
 class PermissionCategory(models.Model):
-    name = models.CharField(max_length=50, unique=True)
+    platform = models.CharField(
+        max_length=32,
+        choices=PlatformChoices.choices,
+        default=PlatformChoices.INTERA_IMS,
+        db_index=True,
+    )
+    name = models.CharField(max_length=50)
     description = models.TextField(blank=True)
     icon = models.CharField(max_length=30, blank=True)
     service= models.CharField(max_length=255, choices=ServiceChoices.choices,default=ServiceChoices.accommodation)
     
     class Meta:
         verbose_name_plural = "Permission Categories"
-        ordering = ['name']
+        ordering = ['platform', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['platform', 'name'],
+                name='unique_permission_category_per_platform',
+            )
+        ]
         
 
     def __str__(self):
@@ -34,6 +51,13 @@ class CombinedPermissions(models.TextChoices):
     APPROVE_COMPANY = 'approve_company', _('Can approve company')
     REJECT_COMPANY = 'reject_company', _('Can reject company')
     MANAGE_COMPANY_SETTINGS = 'manage_company_settings', _('Can manage company settings')
+    CREATE_SUPPORT_ACCESS_GRANT = 'create_support_access_grant', _('Can create support access grants')
+    READ_SUPPORT_ACCESS_GRANT = 'read_support_access_grant', _('Can read support access grants')
+    UPDATE_SUPPORT_ACCESS_GRANT = 'update_support_access_grant', _('Can update support access grants')
+    REVOKE_SUPPORT_ACCESS_GRANT = 'revoke_support_access_grant', _('Can revoke support access grants')
+    APPROVE_SUPPORT_ACCESS_GRANT = 'approve_support_access_grant', _('Can approve support access grants')
+    VIEW_SUPPORT_ACCESS_AUDIT = 'view_support_access_audit', _('Can view support access audit')
+    VIEW_AUDIT_TRAIL = 'view_audit_trail', _('Can view workspace audit trail')
 
     # Contact Permissions
     CREATE_CONTACT = 'create_contact', _('Can create contact')
@@ -49,6 +73,16 @@ class CombinedPermissions(models.TextChoices):
     DELETE_COMPANY_ADDRESS = 'delete_company_address', _('Can delete company address')
     MANAGE_COMPANY_ADDRESS_SETTINGS = 'manage_company_address_settings', _('Can manage company address settings')
 
+    # Agent Permissions
+    CREATE_AGENT = 'create_agent', _('Can create agent')
+    READ_AGENT = 'read_agent', _('Can read agent')
+    UPDATE_AGENT = 'update_agent', _('Can update agent')
+    DELETE_AGENT = 'delete_agent', _('Can delete agent')
+    MANAGE_AGENT_SETTINGS = 'manage_agent_settings', _('Can manage agent settings')
+    INTERACT_WITH_AGENT = 'interact_with_agent', _('Can interact with agent')
+    ORAL_CONVERSATION_WITH_AI = 'oral_conversation_with_ai', _('Can use voice conversation with AI')
+    VIEW_AGENT_ACTIVITY = 'view_agent_activity', _('Can view agent activity')
+
     # Inventory Permissions
     CREATE_INVENTORY = 'create_inventory', _('Can create inventory')
     READ_INVENTORY = 'read_inventory', _('Can read inventory')
@@ -61,6 +95,22 @@ class CombinedPermissions(models.TextChoices):
     MANAGE_INVENTORY_SETTINGS = 'manage_inventory_settings', _('Can manage inventory settings')
     VIEW_INVENTORY_REPORTS = 'view_inventory_reports', _('Can view inventory reports')
     VIEW_DASHBOARD_REPORTS = 'can_view_dashboard', _('Can view Dashboard reports')
+
+    # Manufacturing and financial-control permissions
+    READ_MANUFACTURING = 'read_manufacturing', _('Can read manufacturing')
+    MANAGE_MANUFACTURING = 'manage_manufacturing', _('Can manage manufacturing')
+    MANAGE_WORK_CENTERS = 'manage_work_centers', _('Can manage work centers')
+    MANAGE_QUALITY = 'manage_quality', _('Can manage quality workflows')
+    MANAGE_WASTE_COSTING = 'manage_waste_costing', _('Can manage waste and by-product costing')
+    VIEW_PROFITABILITY_REPORTS = 'view_profitability_reports', _('Can view profitability reports')
+    MANAGE_ACCOUNTING_PERIODS = 'manage_accounting_periods', _('Can manage accounting periods')
+
+    # POS Permissions
+    READ_POS = 'read_pos', _('Can read POS workspace')
+    OPERATE_POS = 'operate_pos', _('Can operate POS sessions, orders, and checkout')
+    MANAGE_POS_SETTINGS = 'manage_pos_settings', _('Can manage POS settings')
+    MANAGE_POS_REMITTANCES = 'manage_pos_remittances', _('Can manage POS remittances')
+    VIEW_POS_REPORTS = 'view_pos_reports', _('Can view POS reports')
 
     CREATE_INVENTORY_CATEGORY = 'create_inventory_category', _('Can create inventory')
     READ_INVENTORY_CATEGORY = 'read_inventory_category', _('Can read inventory')
@@ -195,10 +245,15 @@ class CombinedPermissions(models.TextChoices):
     VIEW_STOCK_LOCATION_REPORTS = 'view_stock_location_reports', _('Can view stock location reports')
 
 class CustomUserPermission(models.Model):
+    platform = models.CharField(
+        max_length=32,
+        choices=PlatformChoices.choices,
+        default=PlatformChoices.INTERA_IMS,
+        db_index=True,
+        help_text="Product platform that owns this permission.",
+    )
     codename = models.CharField(
         max_length=100,
-        unique=True,
-        choices=CombinedPermissions.choices,
         help_text="Technical permission identifier"
     )
     name = models.CharField(
@@ -216,26 +271,32 @@ class CustomUserPermission(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=['codename']),
+            models.Index(fields=['platform', 'codename']),
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=['category', 'codename'],
-                name='unique_permission_per_category'
+                fields=['platform', 'codename'],
+                name='unique_permission_codename_per_platform',
             )
         ]
-        ordering = ['category', 'codename']
+        ordering = ['platform', 'category', 'codename']
 
 
     def __str__(self):
         return f"{self.category.name.replace(' ', '_')}.{self.codename}"
 
+    def clean(self):
+        if self.category_id and self.category.platform != self.platform:
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError({"category": "Permission category must belong to the same platform."})
+
     def save(self, *args, **kwargs):
-        """Auto-populate name from CombinedPermissions choice label"""
+        """Auto-populate known legacy permission labels and validate platform ownership."""
         if not self.name:
-            # Get human-readable name from TextChoices
-            self.name = CombinedPermissions(self.codename).label
+            try:
+                self.name = CombinedPermissions(self.codename).label
+            except ValueError:
+                self.name = self.codename.replace(".", " ").replace("_", " ").title()
+        self.clean()
         super().save(*args, **kwargs)
-
-
-

@@ -1,0 +1,63 @@
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+
+from .views import (
+    CompanyInvitationViewSet,
+    CompanyProfileViewSet,
+    InventoryPolicyViewSet,
+    RecallPolicyViewSet,
+    ReorderStrategyViewSet,
+    StaffRoleAssignmentViewSet,
+    StaffRoleViewSet,
+    TrustedWorkspaceDeviceViewSet,
+    StaffGroupViewSet,
+    CompanyProfileAddressViewSet,
+    SupportAccessGrantViewSet,
+    InternalHosperatorGroupMembersView,
+    InternalHosperatorProfileMembersView,
+    InternalHosperatorCallingDeviceValidationView,
+    InternalSubscriptionUsageView,
+)
+
+router = DefaultRouter()
+
+# Company profile endpoints
+router.register(r'profiles', CompanyProfileViewSet, basename='company-profile')
+router.register(r'roles', StaffRoleViewSet, basename='staff-role')
+router.register(r'groups', StaffGroupViewSet, basename='staff-group')
+router.register(r'addresses',     CompanyProfileAddressViewSet, basename='address')
+router.register(r'assignments', StaffRoleAssignmentViewSet, basename='staff-role-assignment')
+router.register(r'device-bindings', TrustedWorkspaceDeviceViewSet, basename='trusted-workspace-device')
+router.register(r'invitations', CompanyInvitationViewSet, basename='company-invitation')
+router.register(r'support-access-grants', SupportAccessGrantViewSet, basename='support-access-grant')
+
+# Policy endpoints
+router.register(r'recall-policies', RecallPolicyViewSet, basename='recall-policy')
+router.register(r'reorder-strategies', ReorderStrategyViewSet, basename='reorder-strategy')
+router.register(r'inventory-policies', InventoryPolicyViewSet, basename='inventory-policy')
+
+urlpatterns = [
+    path(
+        'internal/profiles/<int:profile_id>/groups/<int:group_id>/members/',
+        InternalHosperatorGroupMembersView.as_view(),
+        name='internal-hosperator-group-members',
+    ),
+    path(
+        'internal/profiles/<int:profile_id>/members/',
+        InternalHosperatorProfileMembersView.as_view(),
+        name='internal-hosperator-profile-members',
+    ),
+    path(
+        'internal/profiles/<int:profile_id>/calling-devices/validate/',
+        InternalHosperatorCallingDeviceValidationView.as_view(),
+        name='internal-hosperator-calling-device-validation',
+    ),
+    path('internal/subscription-usage/', InternalSubscriptionUsageView.as_view(), name='internal-subscription-usage'),
+    path('', include(router.urls)),
+    path(
+        'roles/<str:pk>/deactivate/',
+        StaffRoleAssignmentViewSet.as_view({'post': 'deactivate'}),
+        name='role-deactivate',
+    ),
+
+]

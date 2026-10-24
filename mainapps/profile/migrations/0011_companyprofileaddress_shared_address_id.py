@@ -1,0 +1,10 @@
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+    dependencies = [("profile", "0010_consolidate_system_staff_access")]
+    operations = [migrations.AddField(
+        model_name="companyprofileaddress",
+        name="shared_address_id",
+        field=models.UUIDField(blank=True, db_index=True, editable=False, help_text="Opaque address ID owned by the shared locations service.", null=True, verbose_name="Shared address ID"),
+    )]

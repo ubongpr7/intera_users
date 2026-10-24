@@ -1,0 +1,43 @@
+{% extends "emails/intera_email_base.html" %}
+
+{% block eyebrow %}Temporary Support Access{% endblock %}
+{% block title %}Review access request for {{ company_name }}{% endblock %}
+
+{% block content %}
+<p><strong>{{ requester_email }}</strong> requested temporary workspace access for <strong>{{ recipient_email }}</strong>.</p>
+
+{% if reason %}
+<p>{{ reason }}</p>
+{% endif %}
+
+<div class="summary">
+    <span class="summary-label">Workspace</span>
+    <div class="summary-value">{{ company_name }}</div>
+    <span class="summary-label">Preset</span>
+    <div class="summary-value">{{ preset_name }}</div>
+    <span class="summary-label">Role</span>
+    <div class="summary-value">{{ membership_role }}</div>
+    <span class="summary-label">Access starts</span>
+    <div class="summary-value">{{ starts_at|date:"M j, Y g:i A T" }}</div>
+    <span class="summary-label">Access expires</span>
+    <div class="summary-value">{{ expires_at|date:"M j, Y g:i A T" }}</div>
+    {% if ticket_reference %}
+    <span class="summary-label">Ticket reference</span>
+    <div class="summary-value">{{ ticket_reference }}</div>
+    {% endif %}
+</div>
+
+{% if accept_url %}
+<p><a class="cta" href="{{ accept_url }}">Review request</a></p>
+{% if is_registered_user %}
+<p>Sign in with <strong>{{ recipient_email }}</strong> to accept or decline this request.</p>
+{% else %}
+<p>If you do not have an account yet, create one with <strong>{{ recipient_email }}</strong>, then return to accept or decline this request.</p>
+{% endif %}
+<p>If the button does not open correctly, copy and paste this link into your browser:</p>
+<a class="fallback-link" href="{{ accept_url }}">{{ accept_url }}</a>
+<p>Support access does not become active until you accept this request.</p>
+{% else %}
+<p>This request link is not configured yet. Set the frontend site URL in the user service environment so support-request emails can open the app directly.</p>
+{% endif %}
+{% endblock %}
