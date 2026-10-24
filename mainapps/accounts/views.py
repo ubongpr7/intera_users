@@ -831,6 +831,16 @@ class NativeProviderAuthTicketView(CustomProviderAuthView):
 
     ticket_ttl_seconds = 60
 
+    def get(self, request, *args, **kwargs):
+        """Start native OAuth in the browser so its session cookie is retained."""
+        response = super().get(request, *args, **kwargs)
+        authorization_url = response.data.get("authorization_url") if hasattr(response.data, "get") else None
+        if response.status_code == status.HTTP_200_OK and authorization_url:
+            response.status_code = status.HTTP_302_FOUND
+            response["Location"] = authorization_url
+            response.data = ""
+        return response
+
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
         if response.status_code not in {status.HTTP_200_OK, status.HTTP_201_CREATED}:
