@@ -3,6 +3,8 @@ from .views import (
     CompanyMembershipListView,
     CompanyContextSwitchView,
     CustomProviderAuthView,
+    NativeOAuthTicketExchangeView,
+    NativeProviderAuthTicketView,
     CustomTokenObtainPairView,
     CustomTokenRefreshView,
     CustomTokenVerifyView,
@@ -16,6 +18,12 @@ urlpatterns = [
     path('logout/', LogoutView.as_view(), name='logout'), 
     path('companies/', CompanyMembershipListView.as_view(), name='company_membership_list'),
     path('switch-company/', CompanyContextSwitchView.as_view(), name='switch_company_context'),
+    re_path(
+        r'^o/(?P<provider>\S+)/native/$',
+        NativeProviderAuthTicketView.as_view(),
+        name='native-provider-auth-ticket',
+    ),
+    path('o/native/exchange/', NativeOAuthTicketExchangeView.as_view(), name='native-oauth-ticket-exchange'),
      re_path(
         r'^o/(?P<provider>\S+)/$',
         CustomProviderAuthView.as_view(),

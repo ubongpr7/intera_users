@@ -53,6 +53,7 @@ from .authorization_context import (
     websocket_ticket_lifetime_seconds,
 )
 from django.conf import settings
+from django.core.cache import cache
 from .serializers import (
     MyUserSerializer,
     MyUserSerializer as UserSerializer,
@@ -784,6 +785,7 @@ class CustomProviderAuthView(ProviderAuthView):
                 "privacy_version": PRIVACY_POLICY_VERSION,
             }
             request.session.modified = True
+
         return super().get(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
@@ -822,6 +824,41 @@ class CustomProviderAuthView(ProviderAuthView):
         finally:
             request.session.pop("social_auth_intent", None)
             request.session.modified = True
+
+
+class NativeProviderAuthTicketView(CustomProviderAuthView):
+    """Complete native login in the browser, then hand the app one opaque ticket."""
+
+    ticket_ttl_seconds = 60
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code not in {status.HTTP_200_OK, status.HTTP_201_CREATED}:
+            return response
+
+        ticket = secrets.token_urlsafe(48)
+        payload = dict(response.data)
+        cache.set(f"native-oauth-ticket:{ticket}", payload, self.ticket_ttl_seconds)
+        # Native clients receive the session through the ticket exchange, not browser cookies.
+        response.delete_cookie(settings.AUTH_COOKIE, path=settings.AUTH_COOKIE_PATH, domain=settings.AUTH_COOKIE_DOMAIN)
+        response.delete_cookie(settings.AUTH_REFRESH_COOKIE, path=settings.AUTH_COOKIE_PATH, domain=settings.AUTH_COOKIE_DOMAIN)
+        response.data = {"ticket": ticket, "expires_in": self.ticket_ttl_seconds}
+        return response
+
+
+class NativeOAuthTicketExchangeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        ticket = str(request.data.get("ticket") or "").strip()
+        if not ticket or len(ticket) < 32:
+            return Response({"detail": "Invalid or expired native sign-in ticket."}, status=status.HTTP_400_BAD_REQUEST)
+        cache_key = f"native-oauth-ticket:{ticket}"
+        payload = cache.get(cache_key)
+        if not payload:
+            return Response({"detail": "Invalid or expired native sign-in ticket."}, status=status.HTTP_400_BAD_REQUEST)
+        cache.delete(cache_key)
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class CompanyContextSwitchView(APIView):
