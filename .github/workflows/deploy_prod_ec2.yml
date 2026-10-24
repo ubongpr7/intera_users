@@ -76,10 +76,15 @@ jobs:
             kafka_a2a)
               docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --remove-orphans
               ;;
-            intera_users|subscriptions)
+            subscriptions)
               docker compose -f "${COMPOSE_FILE}" --profile release build web migrate release-tasks
               docker compose -f "${COMPOSE_FILE}" --profile release run --rm migrate
               docker compose -f "${COMPOSE_FILE}" --profile release run --rm release-tasks
+              docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --remove-orphans
+              ;;
+            intera_users)
+              docker compose -f "${COMPOSE_FILE}" --profile release build web migrate
+              docker compose -f "${COMPOSE_FILE}" --profile release run --rm migrate
               docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --remove-orphans
               ;;
             *)
