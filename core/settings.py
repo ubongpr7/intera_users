@@ -636,8 +636,10 @@ elif not EMAIL_BRAND_LOGO_URL:
     EMAIL_BRAND_LOGO_URL = f"{STATIC_URL.rstrip('/')}/{EMAIL_BRAND_STATIC_LOGO_PATH}"
 
 
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
+# Background workers share the service Redis instance. Keep broker configuration
+# internal so deployment only needs to provide REDIS_URL.
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
 USE_L10N = True
 USE_THOUSAND_SEPARATOR = True
 
