@@ -10,6 +10,7 @@ def associate_verified_google_by_email(
     details,
     response,
     user=None,
+    strategy=None,
     *args,
     **kwargs,
 ):
@@ -35,6 +36,16 @@ def associate_verified_google_by_email(
         )
     if users:
         return {"user": users[0], "is_new": False}
+
+    request = getattr(strategy, "request", None)
+    social_intent = ""
+    if request is not None:
+        social_intent = str(request.session.get("social_auth_intent", "login")).strip().lower()
+    if social_intent != "signup":
+        raise AuthException(
+            backend,
+            "No Intera IMS account exists for this Google email. Create an account first.",
+        )
     return None
 
 

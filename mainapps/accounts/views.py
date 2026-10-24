@@ -756,11 +756,25 @@ class CustomProviderAuthView(ProviderAuthView):
 
     def get(self, request, *args, **kwargs):
         """Carry the signup consent decision through the OAuth redirect."""
-        if request.GET.get("signup") == "1":
+        requested_intent = request.GET.get("intent")
+        if requested_intent is None and request.GET.get("signup") == "1":
+            requested_intent = "signup"
+        intent = (requested_intent or "login").strip().lower()
+        if intent not in {"login", "signup"}:
+            return Response(
+                {"detail": "Invalid social authentication intent."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        request.session["social_auth_intent"] = intent
+        request.session.modified = True
+
+        if intent == "signup":
             if not (
                 self._accepted(request.GET.get("terms_accepted"))
                 and self._accepted(request.GET.get("privacy_accepted"))
             ):
+                request.session.pop("social_auth_intent", None)
+                request.session.modified = True
                 return Response(
                     {"detail": "Both legal policies must be accepted before social signup."},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -774,21 +788,40 @@ class CustomProviderAuthView(ProviderAuthView):
 
     def post(self, request, *args, **kwargs):
         social_signup_consent = request.session.get("social_signup_legal_consent")
-        response = super().post(request, *args, **kwargs)
+        try:
+            response = super().post(request, *args, **kwargs)
 
-        if response.status_code == 201:
-            if social_signup_consent:
-                user_id = response.data.get("id")
-                user = User.objects.filter(id=user_id).first()
-                if user:
-                    record_signup_consents(user, request=request, source="social_signup")
-                request.session.pop("social_signup_legal_consent", None)
-                request.session.modified = True
-            access_token = response.data.get('access')
-            refresh_token = response.data.get('refresh')
-            _set_session_cookies(response, access_token=access_token, refresh_token=refresh_token)
+            if response.status_code == 201:
+                if social_signup_consent:
+                    user_id = response.data.get("id")
+                    user = User.objects.filter(id=user_id).first()
+                    if user:
+                        record_signup_consents(user, request=request, source="social_signup")
+                    request.session.pop("social_signup_legal_consent", None)
+                    request.session.modified = True
+                access_token = response.data.get('access')
+                refresh_token = response.data.get('refresh')
+                _set_session_cookies(response, access_token=access_token, refresh_token=refresh_token)
 
-        return response
+            if response.status_code == status.HTTP_400_BAD_REQUEST:
+                detail = ""
+                if hasattr(response.data, "get"):
+                    detail = str(response.data.get("detail", ""))
+                    if not detail:
+                        non_field_errors = response.data.get("non_field_errors", [])
+                        detail = str(non_field_errors[0]) if non_field_errors else ""
+                if not detail:
+                    detail = str(response.data)
+                if "Create an account first" in detail:
+                    response.data = {
+                        "code": "social_login_requires_signup",
+                        "detail": detail,
+                    }
+
+            return response
+        finally:
+            request.session.pop("social_auth_intent", None)
+            request.session.modified = True
 
 
 class CompanyContextSwitchView(APIView):
