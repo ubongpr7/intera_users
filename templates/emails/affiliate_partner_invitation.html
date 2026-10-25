@@ -1,0 +1,9 @@
+{% extends "emails/intera_email_base.html" %}
+{% block content %}
+<h1>Your Intera IMS partnership is ready</h1>
+<p>Hello {{ partner_name }},</p>
+<p>Your affiliate partnership has been created. Your referral code is <strong>{{ referral_code }}</strong>, with a commission rate of <strong>{{ commission_rate|floatformat:2 }}%</strong>.</p>
+<p>Create your Intera IMS account using the button below. Your invited email address is locked to this invitation.</p>
+<p><a href="{{ invite_url }}">Create your affiliate account</a></p>
+<p>This invitation expires on {{ expires_at }}. You will receive partnership notifications by email whether or not you complete account setup.</p>
+{% endblock %}

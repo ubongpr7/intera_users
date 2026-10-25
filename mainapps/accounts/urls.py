@@ -23,4 +23,5 @@ urlpatterns = [
     path("platform-staff-invitations/<uuid:invitation_id>/revoke/", views.PlatformStaffInvitationRevokeView.as_view(), name="platform-staff-invitation-revoke"),
     path("platform-staff-invitations/lookup/", views.PlatformStaffInvitationLookupView.as_view(), name="platform-staff-invitation-lookup"),
     path("platform-staff-invitations/accept/", views.PlatformStaffInvitationAcceptView.as_view(), name="platform-staff-invitation-accept"),
+    path("affiliate-partner-invitations/lookup/", views.AffiliatePartnerInvitationLookupView.as_view(), name="affiliate-partner-invitation-lookup"),
 ]

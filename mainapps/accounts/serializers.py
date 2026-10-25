@@ -6,7 +6,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import AffiliatePartner, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
+from .models import AffiliatePartner, AffiliatePartnerInvitation, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer
@@ -26,6 +26,7 @@ from .authorization_context import (
     has_workspace_admin_access,
     issue_authorization_context,
 )
+from .emails import send_affiliate_notification
 
 
 def _resolve_referrer(attrs):
@@ -43,6 +44,30 @@ def _resolve_referrer(attrs):
         raise serializers.ValidationError({'referral_code': 'Referral code is invalid.'})
     attrs['referrer_user'] = referrer
     attrs['affiliate_partner'] = partner
+    return attrs
+
+
+def _resolve_affiliate_invitation(attrs):
+    raw_token = str(attrs.get('affiliate_invite_token') or '').strip()
+    if not raw_token:
+        attrs['affiliate_invitation'] = None
+        return attrs
+    invitation = AffiliatePartnerInvitation.objects.select_related('partner').filter(
+        token_hash=AffiliatePartnerInvitation.hash_token(raw_token),
+        status=AffiliatePartnerInvitation.Status.PENDING,
+    ).first()
+    if invitation is None:
+        raise serializers.ValidationError({'affiliate_invite_token': 'This affiliate invitation is invalid or expired.'})
+    if invitation.expires_at <= timezone.now():
+        invitation.status = AffiliatePartnerInvitation.Status.EXPIRED
+        invitation.save(update_fields=['status'])
+        raise serializers.ValidationError({'affiliate_invite_token': 'This affiliate invitation has expired.'})
+    if str(attrs.get('email') or '').strip().lower() != invitation.email.lower():
+        raise serializers.ValidationError({'email': 'Use the email address that received this invitation.'})
+    attrs['affiliate_invitation'] = invitation
+    attrs['affiliate_partner'] = invitation.partner
+    attrs['referrer_user'] = None
+    attrs['referral_code'] = invitation.partner.code
     return attrs
 
 
@@ -587,10 +612,11 @@ class AffiliatePartnerSerializer(serializers.ModelSerializer):
     class Meta:
         model = AffiliatePartner
         fields = (
-            'id', 'name', 'code', 'commission_rate', 'is_active', 'notes',
-            'created_by', 'created_at', 'updated_at',
+            'id', 'name', 'email', 'code', 'commission_rate', 'is_active', 'notes',
+            'created_by', 'account_user', 'created_at', 'updated_at',
         )
-        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_by', 'account_user', 'created_at', 'updated_at')
+        extra_kwargs = {'email': {'required': True, 'allow_blank': False}}
 
     def validate_code(self, value):
         code = value.strip().upper()
@@ -621,22 +647,27 @@ class UserCreateSerializer(BaseUserCreateSerializer):
     terms_accepted = serializers.BooleanField(write_only=True, required=True)
     privacy_accepted = serializers.BooleanField(write_only=True, required=True)
     referral_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    affiliate_invite_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
         fields = (
             'id', 'email', 'first_name', 'last_name', 'password',
             'terms_accepted', 'privacy_accepted', 'referral_code',
+            'affiliate_invite_token',
         )
 
     def validate(self, attrs):
         # Remove consent-only fields before Djoser builds a User instance.
         attrs = validate_signup_consents(attrs)
-        return _resolve_referrer(super().validate(attrs))
+        attrs = _resolve_referrer(super().validate(attrs))
+        return _resolve_affiliate_invitation(attrs)
         
     def create(self, validated_data):
         referrer = validated_data.pop('referrer_user', None)
         affiliate_partner = validated_data.pop('affiliate_partner', None)
+        affiliate_invitation = validated_data.pop('affiliate_invitation', None)
+        validated_data.pop('affiliate_invite_token', None)
         validated_data.pop('referral_code', None)
         user = User.objects.create_user(
             email=validated_data['email'].lower(),
@@ -647,6 +678,21 @@ class UserCreateSerializer(BaseUserCreateSerializer):
             referred_by_affiliate_partner=affiliate_partner,
         )
         record_signup_consents(user, request=self.context.get("request"), source="djoser_signup")
+        if affiliate_invitation is not None:
+            affiliate_invitation.status = AffiliatePartnerInvitation.Status.ACCEPTED
+            affiliate_invitation.accepted_user = user
+            affiliate_invitation.accepted_at = timezone.now()
+            affiliate_invitation.save(update_fields=['status', 'accepted_user', 'accepted_at'])
+            affiliate_partner.account_user = user
+            affiliate_partner.save(update_fields=['account_user', 'updated_at'])
+        if affiliate_partner is not None:
+            send_affiliate_notification(
+                affiliate_partner,
+                subject='A new customer registered through your affiliate link',
+                title='New referral registration',
+                message=f'{user.get_full_name} registered using your affiliate link.',
+                details=[('Customer email', user.email), ('Affiliate code', affiliate_partner.code)],
+            )
         return user
 
 

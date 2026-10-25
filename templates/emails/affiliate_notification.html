@@ -1,0 +1,14 @@
+{% extends "emails/intera_email_base.html" %}
+{% block eyebrow %}Affiliate partnership{% endblock %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<p>{{ message }}</p>
+{% if details %}
+<div class="summary">
+{% for label, value in details %}
+<span class="summary-label">{{ label }}</span>
+<div class="summary-value">{{ value }}</div>
+{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

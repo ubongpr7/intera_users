@@ -22,7 +22,7 @@ from drf_yasg.utils import swagger_auto_schema
 from subapps.email_system.emails import send_html_email
 from subapps.utils.request_context import build_frontend_url, get_request_profile_id
 from mainapps.permit.permit import HasModelRequestPermission
-from .models import AffiliatePartner, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
+from .models import AffiliatePartner, AffiliatePartnerInvitation, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
 from .legal import (
     PRIVACY_POLICY_VERSION,
     TERMS_POLICY_VERSION,
@@ -66,6 +66,7 @@ from .serializers import (
     AffiliatePartnerSerializer,
     ReferralPayoutSerializer,
 )
+from .emails import send_affiliate_notification
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -417,21 +418,30 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def referrals(self, request):
         user = request.user
-        payouts = user.referral_payouts.select_related('referred_user').order_by('-created_at')
-        referred_users = user.referred_users.order_by('-date_joined')[:100]
+        partner = getattr(user, 'affiliate_partner_account', None)
+        payouts = (
+            partner.payouts.select_related('referred_user').order_by('-created_at')
+            if partner
+            else user.referral_payouts.select_related('referred_user').order_by('-created_at')
+        )
+        referred_users = (
+            partner.referred_users.order_by('-date_joined')[:100]
+            if partner
+            else user.referred_users.order_by('-date_joined')[:100]
+        )
+        referral_code = partner.code if partner else user.referral_code
+        commission_rate = partner.commission_rate if partner else user.referral_commission_rate
 
         def total_for(queryset):
             return queryset.aggregate(total=Sum('payout_amount')).get('total') or Decimal('0.00')
 
-        referral_url = build_frontend_url(
-            request,
-            f"/accounts?ref={quote(user.referral_code)}",
-        )
+        public_base = (getattr(settings, 'INTERA_IMS_FRONTEND_SITE_URL', '') or getattr(settings, 'FRONTEND_SITE_URL', '')).rstrip('/')
+        referral_url = f"{public_base}/accounts?ref={quote(referral_code)}" if public_base else build_frontend_url(request, f"/accounts?ref={quote(referral_code)}")
         return Response({
-            'referral_code': user.referral_code,
+            'referral_code': referral_code,
             'referral_url': referral_url,
-            'commission_rate': str(user.referral_commission_rate),
-            'referred_count': user.referred_users.count(),
+            'commission_rate': str(commission_rate),
+            'referred_count': partner.referred_users.count() if partner else user.referred_users.count(),
             'referred_users': [
                 {
                     'id': referred.id,
@@ -636,6 +646,68 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
     ordering_fields = ('name', 'code', 'created_at', 'updated_at')
     ordering = ('name',)
 
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        partner = AffiliatePartner.objects.get(pk=response.data['id'])
+        raw_token = secrets.token_urlsafe(32)
+        pending = AffiliatePartnerInvitation.objects.filter(
+            partner=partner,
+            status=AffiliatePartnerInvitation.Status.PENDING,
+        ).first()
+        if pending:
+            pending.status = AffiliatePartnerInvitation.Status.REVOKED
+            pending.save(update_fields=['status'])
+        invitation = AffiliatePartnerInvitation.objects.create(
+            partner=partner,
+            email=partner.email,
+            token_hash=AffiliatePartnerInvitation.hash_token(raw_token),
+            invited_by=request.user,
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+        public_base = (getattr(settings, 'INTERA_IMS_FRONTEND_SITE_URL', '') or getattr(settings, 'FRONTEND_SITE_URL', '')).rstrip('/')
+        invite_url = f"{public_base}/accounts?affiliate_invite={quote(raw_token, safe='')}&email={quote(partner.email, safe='')}&locked=1&ref={quote(partner.code, safe='')}"
+        send_html_email(
+            subject=f"Your Intera IMS affiliate partnership: {partner.code}",
+            message=f"Create your Intera IMS account using this invitation: {invite_url}",
+            to_email=[partner.email],
+            html_file='emails/affiliate_partner_invitation.html',
+            from_email=getattr(settings, 'EMAIL_SYSTEM_FROM_EMAIL', settings.DEFAULT_FROM_EMAIL),
+            context={
+                'partner_name': partner.name,
+                'partner_email': partner.email,
+                'referral_code': partner.code,
+                'commission_rate': partner.commission_rate,
+                'invite_url': invite_url,
+                'expires_at': invitation.expires_at,
+            },
+        )
+        response.data['invitation_status'] = invitation.status
+        response.data['invitation_expires_at'] = invitation.expires_at.isoformat()
+        return response
+
+
+class AffiliatePartnerInvitationLookupView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = str(request.query_params.get('token') or '')
+        invitation = AffiliatePartnerInvitation.objects.select_related('partner').filter(
+            token_hash=AffiliatePartnerInvitation.hash_token(token),
+            status=AffiliatePartnerInvitation.Status.PENDING,
+        ).first()
+        if not invitation:
+            return Response({'detail': 'Invitation is invalid or no longer available.'}, status=status.HTTP_404_NOT_FOUND)
+        if invitation.expires_at <= timezone.now():
+            invitation.status = AffiliatePartnerInvitation.Status.EXPIRED
+            invitation.save(update_fields=['status'])
+            return Response({'detail': 'Invitation has expired.'}, status=status.HTTP_410_GONE)
+        return Response({
+            'email': invitation.email,
+            'partner_name': invitation.partner.name,
+            'referral_code': invitation.partner.code,
+            'expires_at': invitation.expires_at.isoformat(),
+        })
+
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
@@ -654,7 +726,20 @@ class ReferralPayoutViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         # Payment execution remains deliberately manual; this only records the
         # staff decision after the external transfer has been completed.
-        serializer.save()
+        previous_status = serializer.instance.status
+        payout = serializer.save()
+        if previous_status != ReferralPayout.Status.PAID and payout.status == ReferralPayout.Status.PAID and payout.affiliate_partner:
+            send_affiliate_notification(
+                payout.affiliate_partner,
+                subject='Your affiliate payout has been released',
+                title='Affiliate payout released',
+                message='Your affiliate commission has been marked as paid by Intera IMS.',
+                details=[
+                    ('Payout amount', f'{payout.payout_amount} {payout.currency}'),
+                    ('Payment reference', payout.payment_reference),
+                    ('Status', 'Paid'),
+                ],
+            )
 
 
 

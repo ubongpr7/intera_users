@@ -1,7 +1,29 @@
 from django.conf import settings
 from djoser.email import ActivationEmail, PasswordResetEmail
+from subapps.email_system.emails import send_html_email
 
 from subapps.utils.request_context import frontend_origin_from_request
+
+
+def send_affiliate_notification(partner, *, subject, title, message, details=None):
+    if not getattr(partner, "email", ""):
+        return
+    send_html_email(
+        subject=subject,
+        message=message,
+        to_email=[partner.email],
+        html_file="emails/affiliate_notification.html",
+        from_email=getattr(settings, "EMAIL_SYSTEM_FROM_EMAIL", settings.DEFAULT_FROM_EMAIL),
+        context={
+            "title": title,
+            "message": message,
+            "details": details or [],
+            "public_site_url": (
+                getattr(settings, "INTERA_IMS_FRONTEND_SITE_URL", "")
+                or getattr(settings, "FRONTEND_SITE_URL", "")
+            ).rstrip("/"),
+        },
+    )
 
 
 def _static_asset_url(path):
