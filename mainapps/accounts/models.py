@@ -32,6 +32,7 @@ PREFER_NOT_TO_SAY="not_to_mention"
 SEX=(
     ("male",_("Male")),
     ("female",_("Female")),
+    (PREFER_NOT_TO_SAY,_("Prefer not to mention")),
 )
 
 

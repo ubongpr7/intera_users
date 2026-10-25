@@ -647,8 +647,15 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
     ordering = ('name',)
 
     def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        partner = AffiliatePartner.objects.get(pk=response.data['id'])
+        with transaction.atomic():
+            response = super().create(request, *args, **kwargs)
+            partner = AffiliatePartner.objects.get(pk=response.data['id'])
+            account_user = User.objects.filter(email__iexact=partner.email).first()
+            if account_user is None:
+                account_user = User.objects.create_user(partner.email, password=None)
+            partner.account_user = account_user
+            partner.save(update_fields=['account_user', 'updated_at'])
+
         raw_token = secrets.token_urlsafe(32)
         pending = AffiliatePartnerInvitation.objects.filter(
             partner=partner,
@@ -665,10 +672,10 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
             expires_at=timezone.now() + timedelta(days=7),
         )
         public_base = (getattr(settings, 'INTERA_IMS_FRONTEND_SITE_URL', '') or getattr(settings, 'FRONTEND_SITE_URL', '')).rstrip('/')
-        invite_url = f"{public_base}/accounts?affiliate_invite={quote(raw_token, safe='')}&email={quote(partner.email, safe='')}&locked=1&ref={quote(partner.code, safe='')}"
+        invite_url = f"{public_base}/accounts/affiliate-invite/{quote(raw_token, safe='')}"
         send_html_email(
             subject=f"Your Intera IMS affiliate partnership: {partner.code}",
-            message=f"Create your Intera IMS account using this invitation: {invite_url}",
+            message=f"Accept your Intera IMS affiliate invitation and finish setting up your account: {invite_url}",
             to_email=[partner.email],
             html_file='emails/affiliate_partner_invitation.html',
             from_email=getattr(settings, 'EMAIL_SYSTEM_FROM_EMAIL', settings.DEFAULT_FROM_EMAIL),
@@ -683,6 +690,7 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
         )
         response.data['invitation_status'] = invitation.status
         response.data['invitation_expires_at'] = invitation.expires_at.isoformat()
+        response.data['account_user'] = str(partner.account_user_id)
         return response
 
 
@@ -707,6 +715,58 @@ class AffiliatePartnerInvitationLookupView(APIView):
             'referral_code': invitation.partner.code,
             'expires_at': invitation.expires_at.isoformat(),
         })
+
+
+class AffiliatePartnerInvitationAcceptView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = str(request.data.get('token') or '').strip()
+        first_name = str(request.data.get('first_name') or '').strip()
+        last_name = str(request.data.get('last_name') or '').strip()
+        password = request.data.get('password')
+
+        with transaction.atomic():
+            invitation = AffiliatePartnerInvitation.objects.select_for_update().select_related('partner').filter(
+                token_hash=AffiliatePartnerInvitation.hash_token(token),
+            ).first()
+            if not invitation or invitation.status != AffiliatePartnerInvitation.Status.PENDING:
+                return Response({'detail': 'Invitation is invalid or no longer available.'}, status=status.HTTP_400_BAD_REQUEST)
+            if invitation.expires_at <= timezone.now():
+                invitation.status = AffiliatePartnerInvitation.Status.EXPIRED
+                invitation.save(update_fields=['status'])
+                return Response({'detail': 'Invitation has expired.'}, status=status.HTTP_410_GONE)
+            if not first_name:
+                return Response({'detail': 'First name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            partner = invitation.partner
+            user = User.objects.select_for_update().filter(email__iexact=invitation.email).first()
+            if user is None:
+                user = User.objects.create_user(invitation.email, password=None)
+            if not user.has_usable_password():
+                if not password:
+                    return Response({'detail': 'Password is required for a new affiliate account.'}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    validate_password(password, user)
+                except DjangoValidationError as error:
+                    return Response({'password': list(error.messages)}, status=status.HTTP_400_BAD_REQUEST)
+                user.set_password(password)
+
+            user.first_name = first_name
+            user.last_name = last_name
+            user.is_active = True
+            user.is_verified = True
+            user.referred_by_affiliate_partner = partner
+            user.save(update_fields=['first_name', 'last_name', 'is_active', 'is_verified', 'referred_by_affiliate_partner', 'password'])
+
+            partner.account_user = user
+            partner.save(update_fields=['account_user', 'updated_at'])
+            invitation.status = AffiliatePartnerInvitation.Status.ACCEPTED
+            invitation.accepted_user = user
+            invitation.accepted_at = timezone.now()
+            invitation.save(update_fields=['status', 'accepted_user', 'accepted_at'])
+
+        return Response({'detail': 'Affiliate invitation accepted. Sign in to continue.', 'email': user.email}, status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
