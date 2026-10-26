@@ -61,8 +61,9 @@ class AffiliatePartnerInvitationTests(TestCase):
         self.assertEqual(referrals.data["referred_count"], 0)
         self.assertEqual(referrals.data["referred_users"], [])
 
+    @patch("mainapps.accounts.views.send_affiliate_notification")
     @patch("mainapps.accounts.views.send_html_email")
-    def test_partner_edit_persists_code_and_commission(self, send_email):
+    def test_partner_edit_persists_code_and_commission(self, send_email, send_notification):
         created = self.client.post("/accounts/affiliate-partners/", {
             "name": "Partner Two",
             "email": "partner-two@example.com",
@@ -87,6 +88,9 @@ class AffiliatePartnerInvitationTests(TestCase):
         self.assertTrue(partner.account_user.is_affiliate_marketer)
         self.assertEqual(partner.account_user.referral_code, "PARTNERUPDATED")
         self.assertEqual(str(partner.account_user.referral_commission_rate), "0.10000")
+        send_notification.assert_called_once()
+        self.assertEqual(send_notification.call_args.kwargs["details"][0], ("Referral code", "PARTNERUPDATED"))
+        self.assertEqual(send_notification.call_args.kwargs["details"][1], ("Commission rate", "10%"))
 
     @patch("mainapps.accounts.views.send_html_email")
     def test_referral_dashboard_uses_partner_identity_and_counts_only_partner_referrals(self, send_email):

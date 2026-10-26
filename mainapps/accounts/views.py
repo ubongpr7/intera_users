@@ -721,9 +721,27 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
         return response
 
     def perform_update(self, serializer):
+        previous = serializer.instance
+        previous_values = {
+            field: getattr(previous, field)
+            for field in ('code', 'commission_rate', 'notes', 'is_active')
+        }
         partner = serializer.save()
         if partner.account_user_id:
             sync_affiliate_account_user(partner)
+        if any(getattr(partner, field) != value for field, value in previous_values.items()):
+            send_affiliate_notification(
+                partner,
+                subject='Your Intera IMS affiliate link was updated',
+                title='Affiliate link updated',
+                message='Your affiliate partnership details have been updated by Intera IMS.',
+                details=[
+                    ('Referral code', partner.code),
+                    ('Commission rate', commission_rate_percent(partner.commission_rate)),
+                    ('Status', 'Active' if partner.is_active else 'Inactive'),
+                    *([('Agreement terms', partner.notes)] if partner.notes else []),
+                ],
+            )
 
 
 class AffiliatePartnerInvitationLookupView(APIView):
