@@ -32,8 +32,11 @@ class AffiliatePartnerInvitationTests(TestCase):
         self.assertTrue(invited_user.is_affiliate_marketer)
         self.assertEqual(invited_user.referral_code, "PARTNERONE")
         self.assertEqual(str(invited_user.referral_commission_rate), "0.05000")
-        self.assertEqual(send_email.call_args.kwargs["context"]["commission_rate_display"], "5%")
-        self.assertIn("lifetime of each referred client's active subscription", send_email.call_args.kwargs["context"]["agreement_note"])
+        email_context = send_email.call_args.kwargs["context"]
+        self.assertEqual(email_context["commission_rate_display"], "5%")
+        self.assertIn("a 5% commission", email_context["agreement_terms"])
+        self.assertIn("lifetime of each referred client's active subscription", email_context["agreement_terms"])
+        self.assertNotIn("Gibonet receives", email_context["agreement_terms"])
         self.assertFalse(invited_user.has_usable_password())
         invite_url = send_email.call_args.kwargs["context"]["invite_url"]
         token = invite_url.rsplit("/", 1)[-1]

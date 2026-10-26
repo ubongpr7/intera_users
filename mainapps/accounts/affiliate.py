@@ -39,3 +39,15 @@ def commission_rate_percent(rate):
     """Render stored fractional rates (0.20) as human percentages (20%)."""
     value = (Decimal(str(rate)) * Decimal("100")).normalize()
     return format(value, "f") + "%"
+
+
+def affiliate_agreement_terms(rate):
+    commission = commission_rate_percent(rate)
+    return (
+        f"You will receive a {commission} commission on every successful subscription payment "
+        "made by each client referred through your affiliate link or referral code. This "
+        "commission continues for the lifetime of each referred client's active subscription, "
+        "subject to payment completion and excluding refunds, chargebacks, failed payments, "
+        "taxes, and transaction fees. Payouts are processed according to Intera IMS's approved "
+        "payout schedule."
+    )

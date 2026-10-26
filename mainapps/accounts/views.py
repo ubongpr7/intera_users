@@ -67,7 +67,7 @@ from .serializers import (
     ReferralPayoutSerializer,
 )
 from .emails import send_affiliate_notification
-from .affiliate import affiliate_partner_for_user, commission_rate_percent, sync_affiliate_account_user
+from .affiliate import affiliate_agreement_terms, affiliate_partner_for_user, commission_rate_percent, sync_affiliate_account_user
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -698,6 +698,8 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
         )
         public_base = (getattr(settings, 'INTERA_IMS_FRONTEND_SITE_URL', '') or getattr(settings, 'FRONTEND_SITE_URL', '')).rstrip('/')
         invite_url = f"{public_base}/accounts/affiliate-invite/{quote(raw_token, safe='')}"
+        commission_rate_display = commission_rate_percent(partner.commission_rate)
+        agreement_terms = affiliate_agreement_terms(partner.commission_rate)
         send_html_email(
             subject=f"Your Intera IMS affiliate partnership: {partner.code}",
             message=f"Accept your Intera IMS affiliate invitation and finish setting up your account: {invite_url}",
@@ -709,8 +711,8 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
                 'partner_email': partner.email,
                 'referral_code': partner.code,
                 'commission_rate': partner.commission_rate,
-                'commission_rate_display': commission_rate_percent(partner.commission_rate),
-                'agreement_note': partner.notes,
+                'commission_rate_display': commission_rate_display,
+                'agreement_terms': agreement_terms,
                 'invite_url': invite_url,
                 'expires_at': invitation.expires_at,
             },
@@ -739,7 +741,7 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
                     ('Referral code', partner.code),
                     ('Commission rate', commission_rate_percent(partner.commission_rate)),
                     ('Status', 'Active' if partner.is_active else 'Inactive'),
-                    *([('Agreement terms', partner.notes)] if partner.notes else []),
+                    ('Agreement terms', affiliate_agreement_terms(partner.commission_rate)),
                 ],
             )
 
