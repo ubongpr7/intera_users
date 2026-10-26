@@ -16,14 +16,22 @@ def sync_affiliate_account_user(partner, user=None):
     user = user or partner.account_user
     if user is None:
         return None
+    updates = {
+        "is_affiliate_marketer": True,
+        "referral_code": partner.code,
+        "referral_commission_rate": partner.commission_rate,
+    }
+    if user.referred_by_affiliate_partner_id == partner.pk:
+        updates["referred_by_affiliate_partner"] = None
     User.objects.filter(pk=user.pk).update(
-        is_affiliate_marketer=True,
-        referral_code=partner.code,
-        referral_commission_rate=partner.commission_rate,
+        **updates,
     )
     user.is_affiliate_marketer = True
     user.referral_code = partner.code
     user.referral_commission_rate = partner.commission_rate
+    if user.referred_by_affiliate_partner_id == partner.pk:
+        user.referred_by_affiliate_partner = None
+        user.referred_by_affiliate_partner_id = None
     return user
 
 

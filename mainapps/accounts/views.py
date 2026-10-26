@@ -436,10 +436,14 @@ class UserViewSet(viewsets.ModelViewSet):
             if partner
             else user.referral_payouts.select_related('referred_user').order_by('-created_at')
         )
+        if partner:
+            referred_queryset = partner.referred_users
+            if partner.account_user_id:
+                referred_queryset = referred_queryset.exclude(pk=partner.account_user_id)
+        else:
+            referred_queryset = user.referred_users
         referred_users = (
-            partner.referred_users.order_by('-date_joined')[:100]
-            if partner
-            else user.referred_users.order_by('-date_joined')[:100]
+            referred_queryset.order_by('-date_joined')[:100]
         )
         referral_code = partner.code if partner else user.referral_code
         commission_rate = partner.commission_rate if partner else user.referral_commission_rate
@@ -454,7 +458,7 @@ class UserViewSet(viewsets.ModelViewSet):
             'referral_url': referral_url,
             'commission_rate': str(commission_rate),
             'commission_rate_display': commission_rate_percent(commission_rate),
-            'referred_count': partner.referred_users.count() if partner else user.referred_users.count(),
+            'referred_count': referred_queryset.count(),
             'referred_users': [
                 {
                     'id': referred.id,
@@ -784,10 +788,9 @@ class AffiliatePartnerInvitationAcceptView(APIView):
             user.is_active = True
             user.is_verified = True
             user.is_affiliate_marketer = True
-            user.referred_by_affiliate_partner = partner
             user.save(update_fields=[
                 'first_name', 'last_name', 'is_active', 'is_verified',
-                'is_affiliate_marketer', 'referred_by_affiliate_partner', 'password',
+                'is_affiliate_marketer', 'password',
             ])
 
             sync_affiliate_account_user(partner, user)

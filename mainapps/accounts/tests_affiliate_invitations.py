@@ -50,8 +50,14 @@ class AffiliatePartnerInvitationTests(TestCase):
         self.assertTrue(invited_user.has_usable_password())
         self.assertTrue(invited_user.is_verified)
         self.assertTrue(invited_user.is_affiliate_marketer)
-        self.assertEqual(invited_user.referred_by_affiliate_partner_id, partner.id)
+        self.assertIsNone(invited_user.referred_by_affiliate_partner_id)
         self.assertEqual(invitation.status, AffiliatePartnerInvitation.Status.ACCEPTED)
+
+        self.client.force_authenticate(invited_user)
+        referrals = self.client.get("/accounts/users/referrals/")
+        self.assertEqual(referrals.status_code, 200)
+        self.assertEqual(referrals.data["referred_count"], 0)
+        self.assertEqual(referrals.data["referred_users"], [])
 
     @patch("mainapps.accounts.views.send_html_email")
     def test_partner_edit_persists_code_and_commission(self, send_email):
