@@ -67,6 +67,7 @@ from .serializers import (
     ReferralPayoutSerializer,
 )
 from .emails import send_affiliate_notification
+from .affiliate import affiliate_partner_for_user, commission_rate_percent, sync_affiliate_account_user
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -424,7 +425,12 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def referrals(self, request):
         user = request.user
-        partner = getattr(user, 'affiliate_partner_account', None)
+        partner = affiliate_partner_for_user(user)
+        if partner is not None:
+            if partner.account_user_id != user.pk:
+                AffiliatePartner.objects.filter(pk=partner.pk).update(account_user=user)
+                partner.account_user = user
+            sync_affiliate_account_user(partner, user)
         payouts = (
             partner.payouts.select_related('referred_user').order_by('-created_at')
             if partner
@@ -447,6 +453,7 @@ class UserViewSet(viewsets.ModelViewSet):
             'referral_code': referral_code,
             'referral_url': referral_url,
             'commission_rate': str(commission_rate),
+            'commission_rate_display': commission_rate_percent(commission_rate),
             'referred_count': partner.referred_users.count() if partner else user.referred_users.count(),
             'referred_users': [
                 {
@@ -666,6 +673,7 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
             elif not account_user.is_affiliate_marketer:
                 account_user.is_affiliate_marketer = True
                 account_user.save(update_fields=['is_affiliate_marketer'])
+            sync_affiliate_account_user(partner, account_user)
             partner.account_user = account_user
             partner.save(update_fields=['account_user', 'updated_at'])
 
@@ -697,6 +705,7 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
                 'partner_email': partner.email,
                 'referral_code': partner.code,
                 'commission_rate': partner.commission_rate,
+                'commission_rate_display': commission_rate_percent(partner.commission_rate),
                 'invite_url': invite_url,
                 'expires_at': invitation.expires_at,
             },
@@ -708,9 +717,8 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         partner = serializer.save()
-        # Keep the reserved account classified after any partner edit.
         if partner.account_user_id:
-            User.objects.filter(pk=partner.account_user_id).update(is_affiliate_marketer=True)
+            sync_affiliate_account_user(partner)
 
 
 class AffiliatePartnerInvitationLookupView(APIView):
@@ -782,6 +790,7 @@ class AffiliatePartnerInvitationAcceptView(APIView):
                 'is_affiliate_marketer', 'referred_by_affiliate_partner', 'password',
             ])
 
+            sync_affiliate_account_user(partner, user)
             partner.account_user = user
             partner.save(update_fields=['account_user', 'updated_at'])
             invitation.status = AffiliatePartnerInvitation.Status.ACCEPTED

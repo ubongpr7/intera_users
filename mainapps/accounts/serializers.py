@@ -27,6 +27,7 @@ from .authorization_context import (
     issue_authorization_context,
 )
 from .emails import send_affiliate_notification
+from .affiliate import affiliate_partner_for_user
 
 
 def _resolve_referrer(attrs):
@@ -285,7 +286,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["has_setup_mfa"] = bool(getattr(user, "has_setup_mfa", False))
         token["owner_id"] = str(profile.owner_id) if profile and profile.owner_id else None
         token["platform"] = platform
-        affiliate_partner = getattr(user, "referred_by_affiliate_partner", None)
+        affiliate_partner = affiliate_partner_for_user(user)
         token["affiliate_partner_id"] = str(affiliate_partner.id) if affiliate_partner else None
         token["affiliate_commission_rate"] = str(
             affiliate_partner.commission_rate
@@ -626,7 +627,11 @@ class AffiliatePartnerSerializer(serializers.ModelSerializer):
 
     def validate_code(self, value):
         code = value.strip().upper()
+        if len(code) > User._meta.get_field('referral_code').max_length:
+            raise serializers.ValidationError('Affiliate codes must be 16 characters or fewer.')
         user_codes = User.objects.filter(referral_code__iexact=code)
+        if self.instance is not None and self.instance.account_user_id:
+            user_codes = user_codes.exclude(pk=self.instance.account_user_id)
         if user_codes.exists():
             raise serializers.ValidationError('This code is already assigned to a user referral.')
         partner_codes = AffiliatePartner.objects.filter(code__iexact=code)

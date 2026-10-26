@@ -29,6 +29,9 @@ class AffiliatePartnerInvitationTests(TestCase):
         invitation = AffiliatePartnerInvitation.objects.get(partner=partner)
         self.assertEqual(partner.account_user_id, invited_user.id)
         self.assertTrue(invited_user.is_affiliate_marketer)
+        self.assertEqual(invited_user.referral_code, "PARTNERONE")
+        self.assertEqual(str(invited_user.referral_commission_rate), "0.05000")
+        self.assertEqual(send_email.call_args.kwargs["context"]["commission_rate_display"], "5%")
         self.assertFalse(invited_user.has_usable_password())
         invite_url = send_email.call_args.kwargs["context"]["invite_url"]
         token = invite_url.rsplit("/", 1)[-1]
@@ -74,3 +77,27 @@ class AffiliatePartnerInvitationTests(TestCase):
         self.assertEqual(str(partner.commission_rate), "0.10000")
         partner.account_user.refresh_from_db()
         self.assertTrue(partner.account_user.is_affiliate_marketer)
+        self.assertEqual(partner.account_user.referral_code, "PARTNERUPDATED")
+        self.assertEqual(str(partner.account_user.referral_commission_rate), "0.10000")
+
+    @patch("mainapps.accounts.views.send_html_email")
+    def test_referral_dashboard_uses_partner_identity_and_counts_only_partner_referrals(self, send_email):
+        created = self.client.post("/accounts/affiliate-partners/", {
+            "name": "Affiliate One",
+            "email": "affiliate-one@example.com",
+            "code": "AFFILIATEONE",
+            "commission_rate": "0.20",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(created.status_code, 201)
+        partner = AffiliatePartner.objects.get(code="AFFILIATEONE")
+        affiliate_user = partner.account_user
+
+        self.client.force_authenticate(affiliate_user)
+        response = self.client.get("/accounts/users/referrals/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["referral_code"], "AFFILIATEONE")
+        self.assertEqual(response.data["commission_rate"], "0.20000")
+        self.assertEqual(response.data["referred_count"], 0)
+        self.assertEqual(response.data["referred_users"], [])
