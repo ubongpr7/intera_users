@@ -37,6 +37,20 @@ class AdminPortalAccessTests(TestCase):
         self.client.force_authenticate(self.user)
         self.assertEqual(self.client.get("/accounts/users/admin-summary/").status_code, 403)
 
+    def test_staff_can_update_user_referral_code_and_commission(self):
+        self.client.force_authenticate(self.staff)
+
+        response = self.client.patch(
+            f"/accounts/users/{self.user.pk}/",
+            {"referral_code": "UPDATEDCODE", "referral_commission_rate": "0.10000"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.referral_code, "UPDATEDCODE")
+        self.assertEqual(str(self.user.referral_commission_rate), "0.10000")
+
     @patch("mainapps.accounts.views.send_html_email")
     def test_only_superuser_can_create_platform_staff_invitation(self, send_email):
         self.client.force_authenticate(self.staff)

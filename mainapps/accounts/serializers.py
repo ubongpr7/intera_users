@@ -741,6 +741,10 @@ class MyUserSerializer(serializers.ModelSerializer):
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating user information"""
+
+    # The model marks this as non-editable for ordinary model forms, but
+    # platform staff are explicitly allowed to manage it through this API.
+    referral_code = serializers.CharField(required=False, allow_blank=False)
     
     class Meta:
         model = User
