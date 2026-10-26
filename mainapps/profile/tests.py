@@ -123,6 +123,18 @@ class CompanyProfileActionTests(TestCase):
             {"Pharmacist", "Auditor"},
         )
 
+    def test_deleting_workspace_detaches_users_without_deleting_them(self):
+        owner = User.objects.create_user("workspace-owner@example.com", password="StrongPassword123!")
+        profile = CompanyProfile.objects.create(owner=owner, name="Disposable Workspace")
+        owner.profile = profile
+        owner.save(update_fields=["profile"])
+
+        profile.delete()
+
+        owner.refresh_from_db()
+        self.assertTrue(User.objects.filter(pk=owner.pk).exists())
+        self.assertIsNone(owner.profile_id)
+
     def test_platform_admin_can_list_and_verify_workspaces(self):
         response = self.client.get("/management/profiles/")
 

@@ -212,7 +212,7 @@ class User(AbstractUser):
     )
     profile = models.ForeignKey(
         'profile.CompanyProfile',
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='staff',
