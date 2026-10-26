@@ -54,3 +54,19 @@ class SocialResponseContractTests(SimpleTestCase):
         self.assertIsNone(sso_claims["profile_id"])
         self.assertIsNone(sso_claims["membership_role"])
         self.assertEqual(sso_claims["platform"], "intera_ims")
+
+    def test_affiliate_flag_is_present_in_access_claims(self):
+        user = SimpleNamespace(
+            email="affiliate@example.com",
+            is_staff=False,
+            is_superuser=False,
+            is_affiliate_marketer=True,
+            mfa_enabled=False,
+            has_setup_mfa=False,
+            referred_by_id=None,
+        )
+        claims = {}
+
+        MyTokenObtainPairSerializer._apply_claims(claims, user, None)
+
+        self.assertTrue(claims["is_affiliate_marketer"])
