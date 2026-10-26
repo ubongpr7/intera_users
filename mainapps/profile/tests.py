@@ -123,6 +123,27 @@ class CompanyProfileActionTests(TestCase):
             {"Pharmacist", "Auditor"},
         )
 
+    def test_platform_admin_can_list_and_verify_workspaces(self):
+        response = self.client.get("/management/profiles/")
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        self.assertEqual(response.json()[0]["owner_email"], self.user.email)
+        self.assertFalse(response.json()[0]["is_verified"])
+
+        response = self.client.post(f"/management/profiles/{self.profile.id}/verify/")
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        self.assertTrue(response.json()["is_verified"])
+        self.profile.refresh_from_db()
+        self.assertIsNotNone(self.profile.verification_date)
+
+        response = self.client.post(f"/management/profiles/{self.profile.id}/unverify/")
+
+        self.assertEqual(response.status_code, HTTPStatus.OK)
+        self.assertFalse(response.json()["is_verified"])
+        self.profile.refresh_from_db()
+        self.assertIsNone(self.profile.verification_date)
+
     def test_groups_action_returns_profile_groups(self):
         response = self.client.get(f"/management/profiles/{self.profile.id}/groups/")
 

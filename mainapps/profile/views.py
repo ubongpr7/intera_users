@@ -440,6 +440,8 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         "update": "update_company",
         "partial_update": "update_company",
         "destroy": "delete_company",
+        "verify": "manage_company_settings",
+        "unverify": "manage_company_settings",
         "staff_active_assignments": "manage_company_settings",
         "staff_call_directory": "read_company",
         "add_staff": "manage_company_settings",
@@ -488,6 +490,24 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         if not self.request.user.profile_id:
             User.objects.filter(id=self.request.user.id).update(profile=profile)
             self.request.user.profile = profile
+
+    @action(detail=True, methods=["post"])
+    def verify(self, request, pk=None):
+        """Verify a workspace from the platform administration portal."""
+        profile = self.get_object()
+        profile.is_verified = True
+        profile.verification_date = timezone.now()
+        profile.save(update_fields=["is_verified", "verification_date", "updated_at"])
+        return Response(CompanyProfileListSerializer(profile, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"])
+    def unverify(self, request, pk=None):
+        """Revoke workspace verification from the platform administration portal."""
+        profile = self.get_object()
+        profile.is_verified = False
+        profile.verification_date = None
+        profile.save(update_fields=["is_verified", "verification_date", "updated_at"])
+        return Response(CompanyProfileListSerializer(profile, context={"request": request}).data)
 
     def get_queryset(self):
         queryset = super().get_queryset()

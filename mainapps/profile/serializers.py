@@ -59,13 +59,14 @@ class CompanyProfileAddressSerializer(serializers.ModelSerializer):
 class CompanyProfileListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for company profile lists"""
     owner_name = serializers.CharField(source='owner.get_full_name', read_only=True)
+    owner_email = serializers.EmailField(source='owner.email', read_only=True, allow_null=True)
     staff_count = serializers.SerializerMethodField()
     
     class Meta:
         model = CompanyProfile
         fields = [
             'id', 'name', 'industry', 'employees_count', 'is_verified',
-            'owner_name', 'staff_count', 'created_at'
+            'owner_name', 'owner_email', 'staff_count', 'created_at', 'verification_date'
         ]
     
     def get_staff_count(self, obj):
