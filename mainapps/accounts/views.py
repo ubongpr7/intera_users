@@ -56,7 +56,7 @@ from django.conf import settings
 from django.core.cache import cache
 from .serializers import (
     MyUserSerializer,
-    MyUserSerializer as UserSerializer,
+    UserSerializer,
     UserUpdateSerializer,
     UserQuotaMetadataSerializer,
     TokenRefreshSerializer,

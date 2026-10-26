@@ -33,6 +33,15 @@ class AdminPortalAccessTests(TestCase):
         self.assertEqual(response.data["users"]["staff"], 2)
         self.assertIn("workspaces", response.data)
 
+    def test_platform_user_list_includes_joined_and_last_login_timestamps(self):
+        self.client.force_authenticate(self.superuser)
+        response = self.client.get("/accounts/users/")
+        self.assertEqual(response.status_code, 200)
+        users = response.data["results"] if isinstance(response.data, dict) else response.data
+        listed = next(user for user in users if user["id"] == self.user.id)
+        self.assertIsNotNone(listed["date_joined"])
+        self.assertIn("last_login", listed)
+
     def test_non_staff_cannot_read_platform_admin_summary(self):
         self.client.force_authenticate(self.user)
         self.assertEqual(self.client.get("/accounts/users/admin-summary/").status_code, 403)
