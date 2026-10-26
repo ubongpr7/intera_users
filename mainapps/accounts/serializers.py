@@ -605,7 +605,12 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name','role']
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'role',
+            'is_staff', 'is_superuser', 'is_verified', 'mfa_enabled',
+            'is_affiliate_marketer', 'referral_code', 'referral_commission_rate',
+            'date_joined', 'last_login',
+        ]
         ref_name = "AccountsUser"
 
 
@@ -748,6 +753,8 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'picture',
             'referral_code',
             'referral_commission_rate',
+            'is_staff',
+            'is_affiliate_marketer',
         )
 
     def validate_referral_code(self, value):
@@ -768,7 +775,12 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         request = self.context.get('request')
-        if ('referral_code' in attrs or 'referral_commission_rate' in attrs) and not (
+        if (
+            'referral_code' in attrs
+            or 'referral_commission_rate' in attrs
+            or 'is_staff' in attrs
+            or 'is_affiliate_marketer' in attrs
+        ) and not (
             request and (request.user.is_staff or request.user.is_superuser)
         ):
             raise serializers.ValidationError('Only platform staff can manage referral settings.')

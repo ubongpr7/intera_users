@@ -360,6 +360,11 @@ class UserViewSet(viewsets.ModelViewSet):
         return User.objects.filter(id=self.request.user.id)
 
     def destroy(self, request, *args, **kwargs):
+        target = self.get_object()
+        if target.pk == request.user.pk:
+            raise PermissionDenied('You cannot delete your own administrator account.')
+        if target.is_superuser and not request.user.is_superuser:
+            raise PermissionDenied('Only a superuser can delete another superuser.')
         return super().destroy(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
