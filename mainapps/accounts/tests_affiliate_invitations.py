@@ -28,6 +28,7 @@ class AffiliatePartnerInvitationTests(TestCase):
         invited_user = User.objects.get(email="partner@example.com")
         invitation = AffiliatePartnerInvitation.objects.get(partner=partner)
         self.assertEqual(partner.account_user_id, invited_user.id)
+        self.assertTrue(invited_user.is_affiliate_marketer)
         self.assertFalse(invited_user.has_usable_password())
         invite_url = send_email.call_args.kwargs["context"]["invite_url"]
         token = invite_url.rsplit("/", 1)[-1]
@@ -45,5 +46,31 @@ class AffiliatePartnerInvitationTests(TestCase):
         invitation.refresh_from_db()
         self.assertTrue(invited_user.has_usable_password())
         self.assertTrue(invited_user.is_verified)
+        self.assertTrue(invited_user.is_affiliate_marketer)
         self.assertEqual(invited_user.referred_by_affiliate_partner_id, partner.id)
         self.assertEqual(invitation.status, AffiliatePartnerInvitation.Status.ACCEPTED)
+
+    @patch("mainapps.accounts.views.send_html_email")
+    def test_partner_edit_persists_code_and_commission(self, send_email):
+        created = self.client.post("/accounts/affiliate-partners/", {
+            "name": "Partner Two",
+            "email": "partner-two@example.com",
+            "code": "PARTNERTWO",
+            "commission_rate": "0.05",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(created.status_code, 201)
+        partner = AffiliatePartner.objects.get(code="PARTNERTWO")
+
+        response = self.client.patch(
+            f"/accounts/affiliate-partners/{partner.pk}/",
+            {"code": "PARTNERUPDATED", "commission_rate": "0.10"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        partner.refresh_from_db()
+        self.assertEqual(partner.code, "PARTNERUPDATED")
+        self.assertEqual(str(partner.commission_rate), "0.10000")
+        partner.account_user.refresh_from_db()
+        self.assertTrue(partner.account_user.is_affiliate_marketer)

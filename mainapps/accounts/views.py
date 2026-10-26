@@ -190,6 +190,7 @@ def _build_auth_payload(
         "is_verified": getattr(user, "is_verified", False),
         "is_staff": bool(user.is_staff),
         "is_superuser": bool(user.is_superuser),
+        "is_affiliate_marketer": bool(getattr(user, "is_affiliate_marketer", False)),
         "profile": str(profile.id) if profile else None,
         "profile_context": MyTokenObtainPairSerializer._profile_payload(
             profile,
@@ -652,7 +653,14 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
             partner = AffiliatePartner.objects.get(pk=response.data['id'])
             account_user = User.objects.filter(email__iexact=partner.email).first()
             if account_user is None:
-                account_user = User.objects.create_user(partner.email, password=None)
+                account_user = User.objects.create_user(
+                    partner.email,
+                    password=None,
+                    is_affiliate_marketer=True,
+                )
+            elif not account_user.is_affiliate_marketer:
+                account_user.is_affiliate_marketer = True
+                account_user.save(update_fields=['is_affiliate_marketer'])
             partner.account_user = account_user
             partner.save(update_fields=['account_user', 'updated_at'])
 
@@ -692,6 +700,12 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
         response.data['invitation_expires_at'] = invitation.expires_at.isoformat()
         response.data['account_user'] = str(partner.account_user_id)
         return response
+
+    def perform_update(self, serializer):
+        partner = serializer.save()
+        # Keep the reserved account classified after any partner edit.
+        if partner.account_user_id:
+            User.objects.filter(pk=partner.account_user_id).update(is_affiliate_marketer=True)
 
 
 class AffiliatePartnerInvitationLookupView(APIView):
@@ -756,8 +770,12 @@ class AffiliatePartnerInvitationAcceptView(APIView):
             user.last_name = last_name
             user.is_active = True
             user.is_verified = True
+            user.is_affiliate_marketer = True
             user.referred_by_affiliate_partner = partner
-            user.save(update_fields=['first_name', 'last_name', 'is_active', 'is_verified', 'referred_by_affiliate_partner', 'password'])
+            user.save(update_fields=[
+                'first_name', 'last_name', 'is_active', 'is_verified',
+                'is_affiliate_marketer', 'referred_by_affiliate_partner', 'password',
+            ])
 
             partner.account_user = user
             partner.save(update_fields=['account_user', 'updated_at'])

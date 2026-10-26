@@ -199,6 +199,11 @@ class User(AbstractUser):
     )
     is_verified = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
+    is_affiliate_marketer = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Affiliate partner account restricted from normal workspace and billing operations.',
+    )
     date_of_birth = models.DateField(
         verbose_name='Date Of Birth',
         help_text='You must be above 18 years of age.',

@@ -471,6 +471,11 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         return super().get_permissions()
 
     def perform_create(self, serializer):
+        if getattr(self.request.user, 'is_affiliate_marketer', False):
+            raise PermissionDenied(
+                'Affiliate marketer accounts cannot create workspaces. '
+                'Use the affiliate dashboard to manage referrals and earnings.'
+            )
         profile = serializer.save(owner=self.request.user)
         CompanyMembership.objects.update_or_create(
             user=self.request.user,

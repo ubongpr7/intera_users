@@ -280,6 +280,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["email"] = user.email
         token["is_staff"] = bool(user.is_staff)
         token["is_superuser"] = bool(user.is_superuser)
+        token["is_affiliate_marketer"] = bool(getattr(user, "is_affiliate_marketer", False))
         token["mfa_enabled"] = bool(getattr(user, "mfa_enabled", False))
         token["has_setup_mfa"] = bool(getattr(user, "has_setup_mfa", False))
         token["owner_id"] = str(profile.owner_id) if profile and profile.owner_id else None
@@ -718,6 +719,7 @@ class MyUserSerializer(serializers.ModelSerializer):
             'date_of_birth',
             'picture',
             'is_verified',
+            'is_affiliate_marketer',
             'mfa_enabled',
             'has_setup_mfa',
             'profile',

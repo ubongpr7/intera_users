@@ -37,7 +37,7 @@ class RootUserCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            'first_name', 'email', 'password', 're_password',
+            'first_name', 'last_name', 'email', 'password', 're_password',
             'terms_accepted', 'privacy_accepted', 'referral_code',
         )
         extra_kwargs = {
@@ -75,7 +75,7 @@ class StaffUserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('first_name', 'email', 'password','phone',)
+        fields = ('first_name', 'last_name', 'email', 'password', 'phone',)
         extra_kwargs = {
             'first_name': {'required': True},
             'email': {'required': True}
@@ -101,6 +101,7 @@ class MyUserSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'email', 'first_name', 'last_name', 'phone', 'picture', 'sex',
             'is_verified', 'is_staff',
+            'is_affiliate_marketer',
             'date_of_birth', 'profile', 'custom_permissions', 'roles', 'referral_code',
         ]
         read_only_fields = ['id', 'is_verified', 'is_staff']
