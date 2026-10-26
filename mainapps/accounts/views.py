@@ -710,6 +710,7 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
                 'referral_code': partner.code,
                 'commission_rate': partner.commission_rate,
                 'commission_rate_display': commission_rate_percent(partner.commission_rate),
+                'agreement_note': partner.notes,
                 'invite_url': invite_url,
                 'expires_at': invitation.expires_at,
             },

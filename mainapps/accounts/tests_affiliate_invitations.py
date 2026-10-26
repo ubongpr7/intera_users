@@ -20,6 +20,7 @@ class AffiliatePartnerInvitationTests(TestCase):
             "email": "partner@example.com",
             "code": "PARTNERONE",
             "commission_rate": "0.05",
+            "notes": "Gibonet receives the configured commission on successful referred subscriptions for the lifetime of each referred client's active subscription.",
             "is_active": True,
         }, format="json")
 
@@ -32,6 +33,7 @@ class AffiliatePartnerInvitationTests(TestCase):
         self.assertEqual(invited_user.referral_code, "PARTNERONE")
         self.assertEqual(str(invited_user.referral_commission_rate), "0.05000")
         self.assertEqual(send_email.call_args.kwargs["context"]["commission_rate_display"], "5%")
+        self.assertIn("lifetime of each referred client's active subscription", send_email.call_args.kwargs["context"]["agreement_note"])
         self.assertFalse(invited_user.has_usable_password())
         invite_url = send_email.call_args.kwargs["context"]["invite_url"]
         token = invite_url.rsplit("/", 1)[-1]
