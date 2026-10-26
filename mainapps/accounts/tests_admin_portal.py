@@ -51,7 +51,7 @@ class AdminPortalAccessTests(TestCase):
 
         response = self.client.patch(
             f"/accounts/users/{self.user.pk}/",
-            {"referral_code": "UPDATEDCODE", "referral_commission_rate": "0.10000"},
+            {"referral_code": "UPDATEDCODE", "referral_commission_rate": "0.10000", "is_verified": True},
             format="json",
         )
 
@@ -59,6 +59,7 @@ class AdminPortalAccessTests(TestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.referral_code, "UPDATEDCODE")
         self.assertEqual(str(self.user.referral_commission_rate), "0.10000")
+        self.assertTrue(self.user.is_verified)
 
     @patch("mainapps.accounts.views.send_html_email")
     def test_only_superuser_can_create_platform_staff_invitation(self, send_email):

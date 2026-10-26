@@ -764,6 +764,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'referral_commission_rate',
             'is_staff',
             'is_affiliate_marketer',
+            'is_verified',
         )
 
     def validate_referral_code(self, value):
@@ -789,6 +790,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             or 'referral_commission_rate' in attrs
             or 'is_staff' in attrs
             or 'is_affiliate_marketer' in attrs
+            or 'is_verified' in attrs
         ) and not (
             request and (request.user.is_staff or request.user.is_superuser)
         ):
