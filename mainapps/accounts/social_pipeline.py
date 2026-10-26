@@ -2,7 +2,6 @@
 
 from django.contrib.auth import get_user_model
 from social_core.exceptions import AuthException, AuthForbidden
-from social_core.pipeline.user import user_details
 
 
 def associate_verified_google_by_email(
@@ -58,19 +57,27 @@ def preserve_existing_user_details(
     *args,
     **kwargs,
 ):
-    """Keep existing account names when a verified social identity is linked.
+    """Persist provider names only while creating a new social account.
 
-    New social accounts still receive provider details. Existing accounts keep
-    the name already entered in Intera IMS instead of being overwritten by the
-    provider's profile name.
+    Names are protected globally so an existing account cannot be overwritten
+    during login. That protection also applies to ``user_details`` though, so
+    new SSO registrations need an explicit save after social-auth creates the
+    user. Login deliberately does not fill missing names from the provider.
     """
-    if user is not None and not is_new:
+    if user is None:
+        return None
+
+    if not is_new:
         return {"user": user}
-    return user_details(
-        strategy,
-        details,
-        backend=backend,
-        user=user,
-        *args,
-        **kwargs,
-    )
+
+    updates = {}
+    for field in ("first_name", "last_name"):
+        provider_value = str(details.get(field) or "").strip()
+        if provider_value and getattr(user, field, "") != provider_value:
+            setattr(user, field, provider_value)
+            updates[field] = provider_value
+
+    if updates:
+        user.save(update_fields=list(updates))
+
+    return {"user": user}
