@@ -192,6 +192,7 @@ def _build_auth_payload(
         "is_staff": bool(user.is_staff),
         "is_superuser": bool(user.is_superuser),
         "is_affiliate_marketer": bool(getattr(user, "is_affiliate_marketer", False)),
+        "is_support": bool(getattr(user, "is_support", False)),
         "profile": str(profile.id) if profile else None,
         "profile_context": MyTokenObtainPairSerializer._profile_payload(
             profile,
@@ -390,6 +391,7 @@ class UserViewSet(viewsets.ModelViewSet):
             'last_name': user.last_name,
             'is_staff': bool(user.is_staff),
             'is_superuser': bool(user.is_superuser),
+            'is_support': bool(getattr(user, 'is_support', False)),
         })
 
     @action(detail=False, methods=['get'], url_path='admin-summary')

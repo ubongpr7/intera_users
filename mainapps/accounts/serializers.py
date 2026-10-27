@@ -282,6 +282,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["is_staff"] = bool(user.is_staff)
         token["is_superuser"] = bool(user.is_superuser)
         token["is_affiliate_marketer"] = bool(getattr(user, "is_affiliate_marketer", False))
+        token["is_support"] = bool(getattr(user, "is_support", False))
         token["mfa_enabled"] = bool(getattr(user, "mfa_enabled", False))
         token["has_setup_mfa"] = bool(getattr(user, "has_setup_mfa", False))
         token["owner_id"] = str(profile.owner_id) if profile and profile.owner_id else None
@@ -609,7 +610,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'email', 'first_name', 'last_name', 'role',
             'is_staff', 'is_superuser', 'is_verified', 'mfa_enabled',
-            'is_affiliate_marketer', 'referral_code', 'referral_commission_rate',
+            'is_affiliate_marketer', 'is_support', 'referral_code', 'referral_commission_rate',
             'date_joined', 'last_login',
         ]
         ref_name = "AccountsUser"
@@ -730,6 +731,7 @@ class MyUserSerializer(serializers.ModelSerializer):
             'picture',
             'is_verified',
             'is_affiliate_marketer',
+            'is_support',
             'mfa_enabled',
             'has_setup_mfa',
             'profile',
@@ -764,6 +766,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'referral_commission_rate',
             'is_staff',
             'is_affiliate_marketer',
+            'is_support',
             'is_verified',
         )
 
@@ -790,6 +793,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             or 'referral_commission_rate' in attrs
             or 'is_staff' in attrs
             or 'is_affiliate_marketer' in attrs
+            or 'is_support' in attrs
             or 'is_verified' in attrs
         ) and not (
             request and (request.user.is_staff or request.user.is_superuser)

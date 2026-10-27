@@ -204,6 +204,11 @@ class User(AbstractUser):
         db_index=True,
         help_text='Affiliate partner account restricted from normal workspace and billing operations.',
     )
+    is_support = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Platform support account allowed to use the support portal without admin access.',
+    )
     date_of_birth = models.DateField(
         verbose_name='Date Of Birth',
         help_text='You must be above 18 years of age.',

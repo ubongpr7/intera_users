@@ -102,6 +102,7 @@ class MyUserSerializer(serializers.ModelSerializer):
             'id', 'email', 'first_name', 'last_name', 'phone', 'picture', 'sex',
             'is_verified', 'is_staff',
             'is_affiliate_marketer',
+            'is_support',
             'date_of_birth', 'profile', 'custom_permissions', 'roles', 'referral_code',
         ]
         read_only_fields = ['id', 'is_verified', 'is_staff']
