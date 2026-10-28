@@ -656,6 +656,11 @@ class VerificationCodeSerializer(serializers.ModelSerializer):
 
 
 class UserCreateSerializer(BaseUserCreateSerializer):
+    # Public registration must not silently create a nameless account. The
+    # model remains blankable for legacy/system-created records, so enforce the
+    # registration contract explicitly here.
+    first_name = serializers.CharField(required=True, allow_blank=False, trim_whitespace=True)
+    last_name = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
     terms_accepted = serializers.BooleanField(write_only=True, required=True)
     privacy_accepted = serializers.BooleanField(write_only=True, required=True)
     referral_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -668,6 +673,16 @@ class UserCreateSerializer(BaseUserCreateSerializer):
             'terms_accepted', 'privacy_accepted', 'referral_code',
             'affiliate_invite_token',
         )
+
+    def to_internal_value(self, data):
+        """Accept the public snake_case contract and mobile-style aliases."""
+        if hasattr(data, "copy"):
+            data = data.copy()
+            if not data.get("first_name") and data.get("firstName"):
+                data["first_name"] = data.get("firstName")
+            if not data.get("last_name") and data.get("lastName"):
+                data["last_name"] = data.get("lastName")
+        return super().to_internal_value(data)
 
     def validate(self, attrs):
         # Remove consent-only fields before Djoser builds a User instance.

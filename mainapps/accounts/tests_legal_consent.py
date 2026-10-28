@@ -33,6 +33,8 @@ class SignupLegalConsentTests(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         user = serializer.save()
 
+        self.assertEqual(user.first_name, "Signup")
+        self.assertEqual(user.last_name, "User")
         self.assertEqual(
             LegalConsent.objects.filter(user=user).values_list("consent_type", flat=True).count(),
             2,
@@ -59,7 +61,22 @@ class SignupLegalConsentTests(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         user = serializer.save()
 
+        self.assertEqual(user.first_name, "Signup")
+        self.assertEqual(user.last_name, "User")
         self.assertEqual(LegalConsent.objects.filter(user=user).count(), 2)
+
+    def test_djoser_signup_rejects_missing_first_name(self):
+        data = self._data(
+            email="missing-name@example.com",
+            terms_accepted=True,
+            privacy_accepted=True,
+        )
+        data.pop("first_name")
+
+        serializer = UserCreateSerializer(data=data)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("first_name", serializer.errors)
 
     def test_new_users_receive_a_referral_code(self):
         user = User.objects.create_user(email="referrer@example.com", password=self.password)
