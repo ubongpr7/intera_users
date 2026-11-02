@@ -1,3 +1,5 @@
+import logging
+
 from django.db import transaction
 from django.db.models.signals import m2m_changed, post_delete, post_save
 from django.dispatch import receiver
@@ -11,11 +13,24 @@ from subapps.kafka.producers.identity import (
     publish_company_profile_upserted,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _publish_after_commit(callback, event_name):
+    """Keep committed profile changes successful when event delivery is unavailable."""
+    def publish() -> None:
+        try:
+            callback()
+        except Exception:
+            logger.exception("Failed to publish %s event after database commit", event_name)
+
+    transaction.on_commit(publish)
+
 
 @receiver(post_save, sender=CompanyProfile)
 def create_default_roles_and_groups(sender, instance, created, **kwargs):
     if not created:
-        transaction.on_commit(lambda: publish_company_profile_upserted(instance))
+        _publish_after_commit(lambda: publish_company_profile_upserted(instance), "identity.company_profile.upserted")
         return
 
     if instance.owner_id:
@@ -28,13 +43,13 @@ def create_default_roles_and_groups(sender, instance, created, **kwargs):
             },
         )
 
-    transaction.on_commit(lambda: publish_company_profile_upserted(instance))
+    _publish_after_commit(lambda: publish_company_profile_upserted(instance), "identity.company_profile.upserted")
 
 
 @receiver(post_delete, sender=CompanyProfile)
 def publish_deleted_company_profile(sender, instance, **kwargs):
     del sender, kwargs
-    transaction.on_commit(lambda: publish_company_profile_deleted(instance))
+    _publish_after_commit(lambda: publish_company_profile_deleted(instance), "identity.company_profile.deleted")
 
 
 def _publish_address_profile(profile_id: int | None) -> None:
@@ -46,7 +61,7 @@ def _publish_address_profile(profile_id: int | None) -> None:
         if profile is not None:
             publish_company_profile_upserted(profile)
 
-    transaction.on_commit(publish)
+    _publish_after_commit(publish, "identity.company_profile.upserted")
 
 
 @receiver(post_save, sender=CompanyProfileAddress)
@@ -64,13 +79,13 @@ def publish_company_profile_after_address_delete(sender, instance, **kwargs):
 @receiver(post_save, sender=CompanyMembership)
 def publish_company_membership(sender, instance, **kwargs):
     del sender, kwargs
-    transaction.on_commit(lambda: publish_company_membership_upserted(instance))
+    _publish_after_commit(lambda: publish_company_membership_upserted(instance), "identity.membership.upserted")
 
 
 @receiver(post_delete, sender=CompanyMembership)
 def publish_deleted_company_membership(sender, instance, **kwargs):
     del sender, kwargs
-    transaction.on_commit(lambda: publish_company_membership_deleted(instance))
+    _publish_after_commit(lambda: publish_company_membership_deleted(instance), "identity.membership.deleted")
 
 
 @receiver(m2m_changed, sender=CompanyMembership.custom_permissions.through)
@@ -97,7 +112,7 @@ def publish_company_membership_permissions(sender, instance, action, **kwargs):
         delattr(instance, "_audit_membership_permissions_before")
 
     if before_permissions != after_permissions:
-        transaction.on_commit(
+        _publish_after_commit(
             lambda: publish_membership_permissions_updated(
                 actor={
                     "type": "system",
@@ -106,7 +121,8 @@ def publish_company_membership_permissions(sender, instance, action, **kwargs):
                 membership=instance,
                 before_permissions=before_permissions,
                 after_permissions=after_permissions,
-            )
+            ),
+            "identity.membership.permissions_updated",
         )
 
-    transaction.on_commit(lambda: publish_company_membership_upserted(instance))
+    _publish_after_commit(lambda: publish_company_membership_upserted(instance), "identity.membership.upserted")

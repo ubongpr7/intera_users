@@ -245,6 +245,7 @@ def issue_authorization_context(
         ),
         "is_staff": bool(user.is_staff),
         "is_superuser": bool(user.is_superuser),
+        "is_support": bool(getattr(user, "is_support", False)),
         "is_owner": bool(profile and profile.owner_id == user.id),
     }
     if platform == PlatformChoices.HOSPERATOR:
@@ -323,6 +324,7 @@ def issue_websocket_ticket(context_payload: dict) -> str:
         "authorization_context_jti": context_payload.get("jti"),
         "access_context_hash": context_payload.get("access_context_hash"),
         "is_staff": bool(context_payload.get("is_staff")),
+        "is_support": bool(context_payload.get("is_support")),
         "is_owner": bool(context_payload.get("is_owner")),
     }
     return jwt.encode(

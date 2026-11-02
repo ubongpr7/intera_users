@@ -6,7 +6,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import AffiliatePartner, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
+from .models import AffiliatePartner, AffiliatePartnerInvitation, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from djoser.serializers import UserCreateSerializer as BaseUserCreateSerializer
@@ -26,6 +26,8 @@ from .authorization_context import (
     has_workspace_admin_access,
     issue_authorization_context,
 )
+from .emails import send_affiliate_notification
+from .affiliate import affiliate_partner_for_user
 
 
 def _resolve_referrer(attrs):
@@ -43,6 +45,30 @@ def _resolve_referrer(attrs):
         raise serializers.ValidationError({'referral_code': 'Referral code is invalid.'})
     attrs['referrer_user'] = referrer
     attrs['affiliate_partner'] = partner
+    return attrs
+
+
+def _resolve_affiliate_invitation(attrs):
+    raw_token = str(attrs.get('affiliate_invite_token') or '').strip()
+    if not raw_token:
+        attrs['affiliate_invitation'] = None
+        return attrs
+    invitation = AffiliatePartnerInvitation.objects.select_related('partner').filter(
+        token_hash=AffiliatePartnerInvitation.hash_token(raw_token),
+        status=AffiliatePartnerInvitation.Status.PENDING,
+    ).first()
+    if invitation is None:
+        raise serializers.ValidationError({'affiliate_invite_token': 'This affiliate invitation is invalid or expired.'})
+    if invitation.expires_at <= timezone.now():
+        invitation.status = AffiliatePartnerInvitation.Status.EXPIRED
+        invitation.save(update_fields=['status'])
+        raise serializers.ValidationError({'affiliate_invite_token': 'This affiliate invitation has expired.'})
+    if str(attrs.get('email') or '').strip().lower() != invitation.email.lower():
+        raise serializers.ValidationError({'email': 'Use the email address that received this invitation.'})
+    attrs['affiliate_invitation'] = invitation
+    attrs['affiliate_partner'] = invitation.partner
+    attrs['referrer_user'] = None
+    attrs['referral_code'] = invitation.partner.code
     return attrs
 
 
@@ -255,11 +281,13 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["email"] = user.email
         token["is_staff"] = bool(user.is_staff)
         token["is_superuser"] = bool(user.is_superuser)
+        token["is_affiliate_marketer"] = bool(getattr(user, "is_affiliate_marketer", False))
+        token["is_support"] = bool(getattr(user, "is_support", False))
         token["mfa_enabled"] = bool(getattr(user, "mfa_enabled", False))
         token["has_setup_mfa"] = bool(getattr(user, "has_setup_mfa", False))
         token["owner_id"] = str(profile.owner_id) if profile and profile.owner_id else None
         token["platform"] = platform
-        affiliate_partner = getattr(user, "referred_by_affiliate_partner", None)
+        affiliate_partner = affiliate_partner_for_user(user)
         token["affiliate_partner_id"] = str(affiliate_partner.id) if affiliate_partner else None
         token["affiliate_commission_rate"] = str(
             affiliate_partner.commission_rate
@@ -579,7 +607,12 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name','role']
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'role',
+            'is_staff', 'is_superuser', 'is_verified', 'mfa_enabled',
+            'is_affiliate_marketer', 'is_support', 'referral_code', 'referral_commission_rate',
+            'date_joined', 'last_login',
+        ]
         ref_name = "AccountsUser"
 
 
@@ -587,14 +620,19 @@ class AffiliatePartnerSerializer(serializers.ModelSerializer):
     class Meta:
         model = AffiliatePartner
         fields = (
-            'id', 'name', 'code', 'commission_rate', 'is_active', 'notes',
-            'created_by', 'created_at', 'updated_at',
+            'id', 'name', 'email', 'code', 'commission_rate', 'is_active', 'notes',
+            'created_by', 'account_user', 'created_at', 'updated_at',
         )
-        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_by', 'account_user', 'created_at', 'updated_at')
+        extra_kwargs = {'email': {'required': True, 'allow_blank': False}}
 
     def validate_code(self, value):
         code = value.strip().upper()
+        if len(code) > User._meta.get_field('referral_code').max_length:
+            raise serializers.ValidationError('Affiliate codes must be 16 characters or fewer.')
         user_codes = User.objects.filter(referral_code__iexact=code)
+        if self.instance is not None and self.instance.account_user_id:
+            user_codes = user_codes.exclude(pk=self.instance.account_user_id)
         if user_codes.exists():
             raise serializers.ValidationError('This code is already assigned to a user referral.')
         partner_codes = AffiliatePartner.objects.filter(code__iexact=code)
@@ -618,25 +656,45 @@ class VerificationCodeSerializer(serializers.ModelSerializer):
 
 
 class UserCreateSerializer(BaseUserCreateSerializer):
+    # Public registration must not silently create a nameless account. The
+    # model remains blankable for legacy/system-created records, so enforce the
+    # registration contract explicitly here.
+    first_name = serializers.CharField(required=True, allow_blank=False, trim_whitespace=True)
+    last_name = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
     terms_accepted = serializers.BooleanField(write_only=True, required=True)
     privacy_accepted = serializers.BooleanField(write_only=True, required=True)
     referral_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    affiliate_invite_token = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta(BaseUserCreateSerializer.Meta):
         model = User
         fields = (
             'id', 'email', 'first_name', 'last_name', 'password',
             'terms_accepted', 'privacy_accepted', 'referral_code',
+            'affiliate_invite_token',
         )
+
+    def to_internal_value(self, data):
+        """Accept the public snake_case contract and mobile-style aliases."""
+        if hasattr(data, "copy"):
+            data = data.copy()
+            if not data.get("first_name") and data.get("firstName"):
+                data["first_name"] = data.get("firstName")
+            if not data.get("last_name") and data.get("lastName"):
+                data["last_name"] = data.get("lastName")
+        return super().to_internal_value(data)
 
     def validate(self, attrs):
         # Remove consent-only fields before Djoser builds a User instance.
         attrs = validate_signup_consents(attrs)
-        return _resolve_referrer(super().validate(attrs))
+        attrs = _resolve_referrer(super().validate(attrs))
+        return _resolve_affiliate_invitation(attrs)
         
     def create(self, validated_data):
         referrer = validated_data.pop('referrer_user', None)
         affiliate_partner = validated_data.pop('affiliate_partner', None)
+        affiliate_invitation = validated_data.pop('affiliate_invitation', None)
+        validated_data.pop('affiliate_invite_token', None)
         validated_data.pop('referral_code', None)
         user = User.objects.create_user(
             email=validated_data['email'].lower(),
@@ -647,6 +705,21 @@ class UserCreateSerializer(BaseUserCreateSerializer):
             referred_by_affiliate_partner=affiliate_partner,
         )
         record_signup_consents(user, request=self.context.get("request"), source="djoser_signup")
+        if affiliate_invitation is not None:
+            affiliate_invitation.status = AffiliatePartnerInvitation.Status.ACCEPTED
+            affiliate_invitation.accepted_user = user
+            affiliate_invitation.accepted_at = timezone.now()
+            affiliate_invitation.save(update_fields=['status', 'accepted_user', 'accepted_at'])
+            affiliate_partner.account_user = user
+            affiliate_partner.save(update_fields=['account_user', 'updated_at'])
+        if affiliate_partner is not None:
+            send_affiliate_notification(
+                affiliate_partner,
+                subject='A new customer registered through your affiliate link',
+                title='New referral registration',
+                message=f'{user.get_full_name} registered using your affiliate link.',
+                details=[('Customer email', user.email), ('Affiliate code', affiliate_partner.code)],
+            )
         return user
 
 
@@ -672,6 +745,8 @@ class MyUserSerializer(serializers.ModelSerializer):
             'date_of_birth',
             'picture',
             'is_verified',
+            'is_affiliate_marketer',
+            'is_support',
             'mfa_enabled',
             'has_setup_mfa',
             'profile',
@@ -688,6 +763,10 @@ class MyUserSerializer(serializers.ModelSerializer):
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     """Serializer for updating user information"""
+
+    # The model marks this as non-editable for ordinary model forms, but
+    # platform staff are explicitly allowed to manage it through this API.
+    referral_code = serializers.CharField(required=False, allow_blank=False)
     
     class Meta:
         model = User
@@ -700,6 +779,10 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'picture',
             'referral_code',
             'referral_commission_rate',
+            'is_staff',
+            'is_affiliate_marketer',
+            'is_support',
+            'is_verified',
         )
 
     def validate_referral_code(self, value):
@@ -720,7 +803,14 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         request = self.context.get('request')
-        if ('referral_code' in attrs or 'referral_commission_rate' in attrs) and not (
+        if (
+            'referral_code' in attrs
+            or 'referral_commission_rate' in attrs
+            or 'is_staff' in attrs
+            or 'is_affiliate_marketer' in attrs
+            or 'is_support' in attrs
+            or 'is_verified' in attrs
+        ) and not (
             request and (request.user.is_staff or request.user.is_superuser)
         ):
             raise serializers.ValidationError('Only platform staff can manage referral settings.')

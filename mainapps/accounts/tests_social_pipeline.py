@@ -84,6 +84,28 @@ class VerifiedGoogleAssociationTests(SimpleTestCase):
         self.assertEqual(result, {"user": existing})
         self.assertEqual(existing.first_name, "Intera")
 
+    def test_new_social_account_persists_provider_names(self):
+        class NewUser:
+            first_name = ""
+            last_name = ""
+
+            def save(self, **kwargs):
+                self.saved_fields = kwargs["update_fields"]
+
+        new_user = NewUser()
+        result = preserve_existing_user_details(
+            strategy=SimpleNamespace(),
+            details={"first_name": "Google", "last_name": "User"},
+            backend=self.backend,
+            user=new_user,
+            is_new=True,
+        )
+
+        self.assertEqual(result, {"user": new_user})
+        self.assertEqual(new_user.first_name, "Google")
+        self.assertEqual(new_user.last_name, "User")
+        self.assertEqual(new_user.saved_fields, ["first_name", "last_name"])
+
 
 class _QuerySet(list):
     def __init__(self, values, filters):

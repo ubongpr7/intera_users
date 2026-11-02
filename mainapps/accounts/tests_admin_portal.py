@@ -33,9 +33,33 @@ class AdminPortalAccessTests(TestCase):
         self.assertEqual(response.data["users"]["staff"], 2)
         self.assertIn("workspaces", response.data)
 
+    def test_platform_user_list_includes_joined_and_last_login_timestamps(self):
+        self.client.force_authenticate(self.superuser)
+        response = self.client.get("/accounts/users/")
+        self.assertEqual(response.status_code, 200)
+        users = response.data["results"] if isinstance(response.data, dict) else response.data
+        listed = next(user for user in users if user["id"] == self.user.id)
+        self.assertIsNotNone(listed["date_joined"])
+        self.assertIn("last_login", listed)
+
     def test_non_staff_cannot_read_platform_admin_summary(self):
         self.client.force_authenticate(self.user)
         self.assertEqual(self.client.get("/accounts/users/admin-summary/").status_code, 403)
+
+    def test_staff_can_update_user_referral_code_and_commission(self):
+        self.client.force_authenticate(self.staff)
+
+        response = self.client.patch(
+            f"/accounts/users/{self.user.pk}/",
+            {"referral_code": "UPDATEDCODE", "referral_commission_rate": "0.10000", "is_verified": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.referral_code, "UPDATEDCODE")
+        self.assertEqual(str(self.user.referral_commission_rate), "0.10000")
+        self.assertTrue(self.user.is_verified)
 
     @patch("mainapps.accounts.views.send_html_email")
     def test_only_superuser_can_create_platform_staff_invitation(self, send_email):

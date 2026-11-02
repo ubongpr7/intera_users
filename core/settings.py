@@ -31,8 +31,8 @@ if not SECRET_KEY:
     raise ImproperlyConfigured("SECRET_KEY must be set.")
 
 DEBUG = env_bool(os.getenv('DEBUG'), default=False)
-DATABASE_CONN_MAX_AGE = int(os.getenv("DATABASE_CONN_MAX_AGE", "600"))
-DATABASE_CONN_HEALTH_CHECKS = os.getenv("DATABASE_CONN_HEALTH_CHECKS", "True") == "True"
+DATABASE_CONN_MAX_AGE = int(os.getenv("DATABASE_CONN_MAX_AGE", "0"))
+DATABASE_CONN_HEALTH_CHECKS = os.getenv("DATABASE_CONN_HEALTH_CHECKS", "False") == "True"
 DATABASE_DISABLE_SERVER_SIDE_CURSORS = os.getenv("DATABASE_DISABLE_SERVER_SIDE_CURSORS", "True") == "True"
 DATABASE_CONNECT_TIMEOUT = int(os.getenv("DATABASE_CONNECT_TIMEOUT", "10"))
 

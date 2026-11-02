@@ -18,6 +18,7 @@ class Command(BaseCommand):
                     {'name': 'Ounce', 'abbreviated_name': 'oz', 'conversion_factor': 0.0283495},
                     {'name': 'Stone', 'abbreviated_name': 'st', 'conversion_factor': 6.35029},
                     {'name': 'Carat', 'abbreviated_name': 'ct', 'conversion_factor': 0.0002},
+                    {'name': 'Microgram', 'abbreviated_name': 'ug', 'conversion_factor': 0.000000001},
                 ]
             },
             {
@@ -33,6 +34,10 @@ class Command(BaseCommand):
                     {'name': 'Barrel', 'abbreviated_name': 'bbl', 'conversion_factor': 158.987},
                     {'name': 'Cubic Foot', 'abbreviated_name': 'ft³', 'conversion_factor': 28.3168},
                     {'name': 'Cubic Inch', 'abbreviated_name': 'in³', 'conversion_factor': 0.0163871},
+                    {'name': 'Centiliter', 'abbreviated_name': 'cL', 'conversion_factor': 0.01},
+                    {'name': 'Deciliter', 'abbreviated_name': 'dL', 'conversion_factor': 0.1},
+                    {'name': 'Microliter', 'abbreviated_name': 'uL', 'conversion_factor': 0.000001},
+                    {'name': 'Cubic Centimeter', 'abbreviated_name': 'cm3', 'conversion_factor': 0.001},
                 ]
             },
             {
@@ -48,18 +53,27 @@ class Command(BaseCommand):
                     {'name': 'Mile', 'abbreviated_name': 'mi', 'conversion_factor': 1609.34},
                     {'name': 'Nautical Mile', 'abbreviated_name': 'nmi', 'conversion_factor': 1852},
                     {'name': 'Light Year', 'abbreviated_name': 'ly', 'conversion_factor': 9.4607e15},
+                    {'name': 'Micrometer', 'abbreviated_name': 'um', 'conversion_factor': 0.000001},
+                    {'name': 'Decimeter', 'abbreviated_name': 'dm', 'conversion_factor': 0.1},
                 ]
             },
             {
                 'dimension_type': Unit.DimensionType.PIECE,
                 'units': [
                     {'name': 'Each', 'abbreviated_name': 'ea'},
+                    {'name': 'Unit', 'abbreviated_name': 'unit'},
+                    {'name': 'Piece', 'abbreviated_name': 'pc'},
                     {'name': 'Dozen', 'abbreviated_name': 'dz', 'conversion_factor': 12},
                     {'name': 'Hundred', 'abbreviated_name': 'C', 'conversion_factor': 100},
                     {'name': 'Thousand', 'abbreviated_name': 'M', 'conversion_factor': 1000},
                     {'name': 'Gross', 'abbreviated_name': 'gr', 'conversion_factor': 144},
                     {'name': 'Great Gross', 'abbreviated_name': 'ggr', 'conversion_factor': 1728},
                     {'name': 'Ream', 'abbreviated_name': 'rm', 'conversion_factor': 500},
+                    {'name': 'Pair', 'abbreviated_name': 'pr', 'conversion_factor': 2},
+                    {'name': 'Bottle', 'abbreviated_name': 'btl'},
+                    {'name': 'Can', 'abbreviated_name': 'can'},
+                    {'name': 'Sachet', 'abbreviated_name': 'sct'},
+                    {'name': 'Tray', 'abbreviated_name': 'tray'},
                     {'name': 'Carton', 'abbreviated_name': 'ctn'},
                     {'name': 'Case', 'abbreviated_name': 'cse'},
                     {'name': 'Pack', 'abbreviated_name': 'pk'},
@@ -99,6 +113,10 @@ class Command(BaseCommand):
                     {'name': 'Jar', 'abbreviated_name': 'jr'},
                     {'name': 'Tube', 'abbreviated_name': 'tb'},
                     {'name': 'Sack', 'abbreviated_name': 'sk'},
+                    {'name': 'Bucket', 'abbreviated_name': 'bkt'},
+                    {'name': 'Pouch', 'abbreviated_name': 'pch'},
+                    {'name': 'Tin', 'abbreviated_name': 'tin'},
+                    {'name': 'Bale', 'abbreviated_name': 'bal'},
                 ]
             }
         ]

@@ -4,6 +4,7 @@ import logging
 from django.db import transaction
 
 from mainapps.accounts.models import AffiliatePartner, ReferralPayout, User
+from mainapps.accounts.emails import send_affiliate_notification
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def handle_affiliate_commission_event(event, **context):
         commission_amount = (payment_amount * commission_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
     with transaction.atomic():
-        ReferralPayout.objects.get_or_create(
+        payout, created = ReferralPayout.objects.get_or_create(
             payment_reference=payment_reference,
             defaults={
                 'referrer_user': referrer,
@@ -65,5 +66,17 @@ def handle_affiliate_commission_event(event, **context):
                 'plan_slug': str(payload.get('plan_slug') or ''),
                 'metadata': payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {},
             },
+        )
+    if created and partner is not None:
+        send_affiliate_notification(
+            partner,
+            subject='A referred customer completed a payment',
+            title='Commission earned',
+            message='A customer referred through your affiliate link completed a payment. The commission is now pending payout review.',
+            details=[
+                ('Payment amount', f"{payment_amount} {str(payload.get('currency') or 'USD').upper()}"),
+                ('Commission amount', f"{commission_amount} {str(payload.get('currency') or 'USD').upper()}"),
+                ('Payment reference', payment_reference),
+            ],
         )
     return True

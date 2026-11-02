@@ -32,6 +32,7 @@ PREFER_NOT_TO_SAY="not_to_mention"
 SEX=(
     ("male",_("Male")),
     ("female",_("Female")),
+    (PREFER_NOT_TO_SAY,_("Prefer not to mention")),
 )
 
 
@@ -69,6 +70,7 @@ def referral_code_from_email(email, *, exclude_user_id=None):
 
 class AffiliatePartner(models.Model):
     name = models.CharField(max_length=160)
+    email = models.EmailField(blank=True, default="", db_index=True)
     code = models.CharField(max_length=32, unique=True, db_index=True)
     commission_rate = models.DecimalField(max_digits=6, decimal_places=5, default='0.05000')
     is_active = models.BooleanField(default=True)
@@ -79,6 +81,13 @@ class AffiliatePartner(models.Model):
         null=True,
         blank=True,
         related_name='created_affiliate_partners',
+    )
+    account_user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='affiliate_partner_account',
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -92,6 +101,39 @@ class AffiliatePartner(models.Model):
 
     def __str__(self):
         return f'{self.name} ({self.code})'
+
+
+class AffiliatePartnerInvitation(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        REVOKED = "revoked", "Revoked"
+        EXPIRED = "expired", "Expired"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    partner = models.ForeignKey(AffiliatePartner, on_delete=models.CASCADE, related_name="invitations")
+    email = models.EmailField(db_index=True)
+    token_hash = models.CharField(max_length=64, unique=True, editable=False)
+    invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="affiliate_partner_invitations")
+    accepted_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="accepted_affiliate_invitations")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True)
+    expires_at = models.DateTimeField()
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("partner",), condition=Q(status="pending"), name="accounts_one_pending_affiliate_invite"),
+        ]
+        ordering = ("-created_at",)
+
+    @staticmethod
+    def normalize_email(value):
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def hash_token(token):
+        return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
 
 
 
@@ -157,6 +199,16 @@ class User(AbstractUser):
     )
     is_verified = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
+    is_affiliate_marketer = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Affiliate partner account restricted from normal workspace and billing operations.',
+    )
+    is_support = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Platform support account allowed to use the support portal without admin access.',
+    )
     date_of_birth = models.DateField(
         verbose_name='Date Of Birth',
         help_text='You must be above 18 years of age.',
@@ -165,7 +217,7 @@ class User(AbstractUser):
     )
     profile = models.ForeignKey(
         'profile.CompanyProfile',
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='staff',

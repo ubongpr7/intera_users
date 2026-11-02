@@ -22,7 +22,7 @@ from drf_yasg.utils import swagger_auto_schema
 from subapps.email_system.emails import send_html_email
 from subapps.utils.request_context import build_frontend_url, get_request_profile_id
 from mainapps.permit.permit import HasModelRequestPermission
-from .models import AffiliatePartner, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
+from .models import AffiliatePartner, AffiliatePartnerInvitation, PlatformStaffInvitation, ReferralPayout, User, VerificationCode
 from .legal import (
     PRIVACY_POLICY_VERSION,
     TERMS_POLICY_VERSION,
@@ -56,7 +56,7 @@ from django.conf import settings
 from django.core.cache import cache
 from .serializers import (
     MyUserSerializer,
-    MyUserSerializer as UserSerializer,
+    UserSerializer,
     UserUpdateSerializer,
     UserQuotaMetadataSerializer,
     TokenRefreshSerializer,
@@ -66,6 +66,8 @@ from .serializers import (
     AffiliatePartnerSerializer,
     ReferralPayoutSerializer,
 )
+from .emails import send_affiliate_notification
+from .affiliate import affiliate_agreement_terms, affiliate_partner_for_user, commission_rate_percent, sync_affiliate_account_user
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -189,6 +191,8 @@ def _build_auth_payload(
         "is_verified": getattr(user, "is_verified", False),
         "is_staff": bool(user.is_staff),
         "is_superuser": bool(user.is_superuser),
+        "is_affiliate_marketer": bool(getattr(user, "is_affiliate_marketer", False)),
+        "is_support": bool(getattr(user, "is_support", False)),
         "profile": str(profile.id) if profile else None,
         "profile_context": MyTokenObtainPairSerializer._profile_payload(
             profile,
@@ -358,6 +362,11 @@ class UserViewSet(viewsets.ModelViewSet):
         return User.objects.filter(id=self.request.user.id)
 
     def destroy(self, request, *args, **kwargs):
+        target = self.get_object()
+        if target.pk == request.user.pk:
+            raise PermissionDenied('You cannot delete your own administrator account.')
+        if target.is_superuser and not request.user.is_superuser:
+            raise PermissionDenied('Only a superuser can delete another superuser.')
         return super().destroy(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
@@ -382,6 +391,7 @@ class UserViewSet(viewsets.ModelViewSet):
             'last_name': user.last_name,
             'is_staff': bool(user.is_staff),
             'is_superuser': bool(user.is_superuser),
+            'is_support': bool(getattr(user, 'is_support', False)),
         })
 
     @action(detail=False, methods=['get'], url_path='admin-summary')
@@ -417,21 +427,40 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def referrals(self, request):
         user = request.user
-        payouts = user.referral_payouts.select_related('referred_user').order_by('-created_at')
-        referred_users = user.referred_users.order_by('-date_joined')[:100]
+        partner = affiliate_partner_for_user(user)
+        if partner is not None:
+            if partner.account_user_id != user.pk:
+                AffiliatePartner.objects.filter(pk=partner.pk).update(account_user=user)
+                partner.account_user = user
+            sync_affiliate_account_user(partner, user)
+        payouts = (
+            partner.payouts.select_related('referred_user').order_by('-created_at')
+            if partner
+            else user.referral_payouts.select_related('referred_user').order_by('-created_at')
+        )
+        if partner:
+            referred_queryset = partner.referred_users
+            if partner.account_user_id:
+                referred_queryset = referred_queryset.exclude(pk=partner.account_user_id)
+        else:
+            referred_queryset = user.referred_users
+        referred_users = (
+            referred_queryset.order_by('-date_joined')[:100]
+        )
+        referral_code = partner.code if partner else user.referral_code
+        commission_rate = partner.commission_rate if partner else user.referral_commission_rate
 
         def total_for(queryset):
             return queryset.aggregate(total=Sum('payout_amount')).get('total') or Decimal('0.00')
 
-        referral_url = build_frontend_url(
-            request,
-            f"/accounts?ref={quote(user.referral_code)}",
-        )
+        public_base = (getattr(settings, 'INTERA_IMS_FRONTEND_SITE_URL', '') or getattr(settings, 'FRONTEND_SITE_URL', '')).rstrip('/')
+        referral_url = f"{public_base}/accounts?ref={quote(referral_code)}" if public_base else build_frontend_url(request, f"/accounts?ref={quote(referral_code)}")
         return Response({
-            'referral_code': user.referral_code,
+            'referral_code': referral_code,
             'referral_url': referral_url,
-            'commission_rate': str(user.referral_commission_rate),
-            'referred_count': user.referred_users.count(),
+            'commission_rate': str(commission_rate),
+            'commission_rate_display': commission_rate_percent(commission_rate),
+            'referred_count': referred_queryset.count(),
             'referred_users': [
                 {
                     'id': referred.id,
@@ -636,6 +665,167 @@ class AffiliatePartnerViewSet(viewsets.ModelViewSet):
     ordering_fields = ('name', 'code', 'created_at', 'updated_at')
     ordering = ('name',)
 
+    def create(self, request, *args, **kwargs):
+        with transaction.atomic():
+            response = super().create(request, *args, **kwargs)
+            partner = AffiliatePartner.objects.get(pk=response.data['id'])
+            account_user = User.objects.filter(email__iexact=partner.email).first()
+            if account_user is None:
+                account_user = User.objects.create_user(
+                    partner.email,
+                    password=None,
+                    is_affiliate_marketer=True,
+                )
+            elif not account_user.is_affiliate_marketer:
+                account_user.is_affiliate_marketer = True
+                account_user.save(update_fields=['is_affiliate_marketer'])
+            sync_affiliate_account_user(partner, account_user)
+            partner.account_user = account_user
+            partner.save(update_fields=['account_user', 'updated_at'])
+
+        raw_token = secrets.token_urlsafe(32)
+        pending = AffiliatePartnerInvitation.objects.filter(
+            partner=partner,
+            status=AffiliatePartnerInvitation.Status.PENDING,
+        ).first()
+        if pending:
+            pending.status = AffiliatePartnerInvitation.Status.REVOKED
+            pending.save(update_fields=['status'])
+        invitation = AffiliatePartnerInvitation.objects.create(
+            partner=partner,
+            email=partner.email,
+            token_hash=AffiliatePartnerInvitation.hash_token(raw_token),
+            invited_by=request.user,
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+        public_base = (getattr(settings, 'INTERA_IMS_FRONTEND_SITE_URL', '') or getattr(settings, 'FRONTEND_SITE_URL', '')).rstrip('/')
+        invite_url = f"{public_base}/accounts/affiliate-invite/{quote(raw_token, safe='')}"
+        commission_rate_display = commission_rate_percent(partner.commission_rate)
+        agreement_terms = affiliate_agreement_terms(partner.commission_rate)
+        send_html_email(
+            subject=f"Your Intera IMS affiliate partnership: {partner.code}",
+            message=f"Accept your Intera IMS affiliate invitation and finish setting up your account: {invite_url}",
+            to_email=[partner.email],
+            html_file='emails/affiliate_partner_invitation.html',
+            from_email=getattr(settings, 'EMAIL_SYSTEM_FROM_EMAIL', settings.DEFAULT_FROM_EMAIL),
+            context={
+                'partner_name': partner.name,
+                'partner_email': partner.email,
+                'referral_code': partner.code,
+                'commission_rate': partner.commission_rate,
+                'commission_rate_display': commission_rate_display,
+                'agreement_terms': agreement_terms,
+                'invite_url': invite_url,
+                'expires_at': invitation.expires_at,
+            },
+        )
+        response.data['invitation_status'] = invitation.status
+        response.data['invitation_expires_at'] = invitation.expires_at.isoformat()
+        response.data['account_user'] = str(partner.account_user_id)
+        return response
+
+    def perform_update(self, serializer):
+        previous = serializer.instance
+        previous_values = {
+            field: getattr(previous, field)
+            for field in ('code', 'commission_rate', 'notes', 'is_active')
+        }
+        partner = serializer.save()
+        if partner.account_user_id:
+            sync_affiliate_account_user(partner)
+        if any(getattr(partner, field) != value for field, value in previous_values.items()):
+            send_affiliate_notification(
+                partner,
+                subject='Your Intera IMS affiliate link was updated',
+                title='Affiliate link updated',
+                message='Your affiliate partnership details have been updated by Intera IMS.',
+                details=[
+                    ('Referral code', partner.code),
+                    ('Commission rate', commission_rate_percent(partner.commission_rate)),
+                    ('Status', 'Active' if partner.is_active else 'Inactive'),
+                    ('Agreement terms', affiliate_agreement_terms(partner.commission_rate)),
+                ],
+            )
+
+
+class AffiliatePartnerInvitationLookupView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = str(request.query_params.get('token') or '')
+        invitation = AffiliatePartnerInvitation.objects.select_related('partner').filter(
+            token_hash=AffiliatePartnerInvitation.hash_token(token),
+            status=AffiliatePartnerInvitation.Status.PENDING,
+        ).first()
+        if not invitation:
+            return Response({'detail': 'Invitation is invalid or no longer available.'}, status=status.HTTP_404_NOT_FOUND)
+        if invitation.expires_at <= timezone.now():
+            invitation.status = AffiliatePartnerInvitation.Status.EXPIRED
+            invitation.save(update_fields=['status'])
+            return Response({'detail': 'Invitation has expired.'}, status=status.HTTP_410_GONE)
+        return Response({
+            'email': invitation.email,
+            'partner_name': invitation.partner.name,
+            'referral_code': invitation.partner.code,
+            'expires_at': invitation.expires_at.isoformat(),
+        })
+
+
+class AffiliatePartnerInvitationAcceptView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = str(request.data.get('token') or '').strip()
+        first_name = str(request.data.get('first_name') or '').strip()
+        last_name = str(request.data.get('last_name') or '').strip()
+        password = request.data.get('password')
+
+        with transaction.atomic():
+            invitation = AffiliatePartnerInvitation.objects.select_for_update().select_related('partner').filter(
+                token_hash=AffiliatePartnerInvitation.hash_token(token),
+            ).first()
+            if not invitation or invitation.status != AffiliatePartnerInvitation.Status.PENDING:
+                return Response({'detail': 'Invitation is invalid or no longer available.'}, status=status.HTTP_400_BAD_REQUEST)
+            if invitation.expires_at <= timezone.now():
+                invitation.status = AffiliatePartnerInvitation.Status.EXPIRED
+                invitation.save(update_fields=['status'])
+                return Response({'detail': 'Invitation has expired.'}, status=status.HTTP_410_GONE)
+            if not first_name:
+                return Response({'detail': 'First name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            partner = invitation.partner
+            user = User.objects.select_for_update().filter(email__iexact=invitation.email).first()
+            if user is None:
+                user = User.objects.create_user(invitation.email, password=None)
+            if not user.has_usable_password():
+                if not password:
+                    return Response({'detail': 'Password is required for a new affiliate account.'}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    validate_password(password, user)
+                except DjangoValidationError as error:
+                    return Response({'password': list(error.messages)}, status=status.HTTP_400_BAD_REQUEST)
+                user.set_password(password)
+
+            user.first_name = first_name
+            user.last_name = last_name
+            user.is_active = True
+            user.is_verified = True
+            user.is_affiliate_marketer = True
+            user.save(update_fields=[
+                'first_name', 'last_name', 'is_active', 'is_verified',
+                'is_affiliate_marketer', 'password',
+            ])
+
+            sync_affiliate_account_user(partner, user)
+            partner.account_user = user
+            partner.save(update_fields=['account_user', 'updated_at'])
+            invitation.status = AffiliatePartnerInvitation.Status.ACCEPTED
+            invitation.accepted_user = user
+            invitation.accepted_at = timezone.now()
+            invitation.save(update_fields=['status', 'accepted_user', 'accepted_at'])
+
+        return Response({'detail': 'Affiliate invitation accepted. Sign in to continue.', 'email': user.email}, status=status.HTTP_200_OK)
+
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
@@ -654,7 +844,20 @@ class ReferralPayoutViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         # Payment execution remains deliberately manual; this only records the
         # staff decision after the external transfer has been completed.
-        serializer.save()
+        previous_status = serializer.instance.status
+        payout = serializer.save()
+        if previous_status != ReferralPayout.Status.PAID and payout.status == ReferralPayout.Status.PAID and payout.affiliate_partner:
+            send_affiliate_notification(
+                payout.affiliate_partner,
+                subject='Your affiliate payout has been released',
+                title='Affiliate payout released',
+                message='Your affiliate commission has been marked as paid by Intera IMS.',
+                details=[
+                    ('Payout amount', f'{payout.payout_amount} {payout.currency}'),
+                    ('Payment reference', payout.payment_reference),
+                    ('Status', 'Paid'),
+                ],
+            )
 
 
 
