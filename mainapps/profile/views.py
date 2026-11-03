@@ -466,9 +466,10 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         return CompanyProfileDetailSerializer
 
     def get_permissions(self):
-        # Every active hospital staff member may call; this directory projection
-        # is intentionally separate from administrative staff management.
-        if self.action == "staff_call_directory":
+        # Workspace creation is available to any authenticated non-affiliate
+        # user; affiliate accounts remain blocked in perform_create. The call
+        # directory is intentionally separate from administrative staff access.
+        if self.action in {"create", "staff_call_directory"}:
             return [IsAuthenticated()]
         return super().get_permissions()
 
