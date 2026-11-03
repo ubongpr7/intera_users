@@ -29,6 +29,9 @@ def _publish_after_commit(callback, event_name):
 
 @receiver(post_save, sender=CompanyProfile)
 def create_default_roles_and_groups(sender, instance, created, **kwargs):
+    if instance.status == CompanyProfile.Status.DELETED:
+        _publish_after_commit(lambda: publish_company_profile_deleted(instance), "identity.company_profile.deleted")
+        return
     if not created:
         _publish_after_commit(lambda: publish_company_profile_upserted(instance), "identity.company_profile.upserted")
         return

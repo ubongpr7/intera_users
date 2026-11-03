@@ -281,7 +281,9 @@ def _invitation_payload(invitation: CompanyInvitation) -> dict[str, Any]:
 def _accessible_profile_queryset(*, principal: UsersMcpPrincipal):
     principal_user_id = coerce_identity_id(principal.user_id)
     return (
-        CompanyProfile.objects.select_related("owner", "headquarters_address", "agent")
+        CompanyProfile.objects.filter(status=CompanyProfile.Status.ACTIVE).select_related(
+            "owner", "headquarters_address", "agent"
+        )
         .prefetch_related(
             Prefetch(
                 "memberships",

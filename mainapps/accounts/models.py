@@ -306,6 +306,17 @@ class User(AbstractUser):
             return None
 
     def delete(self, *args, **kwargs):
+        # Enforce this invariant at the model boundary too, so account
+        # deletion through Djoser or admin cannot bypass the workspace API.
+        from mainapps.profile.models import CompanyProfile
+        if CompanyProfile.objects.filter(
+            owner_id=self.pk,
+            status=CompanyProfile.Status.ACTIVE,
+        ).exists():
+            from django.core.exceptions import ValidationError
+            raise ValidationError(
+                "An account cannot be deleted while it owns an active workspace."
+            )
         if self.picture and self.picture.name != 'default.png':
             self.picture.delete()
         super().delete(*args, **kwargs)

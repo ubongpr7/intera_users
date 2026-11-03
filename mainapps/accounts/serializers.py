@@ -85,11 +85,13 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     @classmethod
     def _active_memberships(cls, user):
-        return CompanyMembership.objects.filter(user=user, is_active=True).select_related("profile")
+        return CompanyMembership.objects.filter(
+            user=user, is_active=True, profile__status=CompanyProfile.Status.ACTIVE
+        ).select_related("profile")
 
     @classmethod
     def _owned_profiles(cls, user):
-        return CompanyProfile.objects.filter(owner=user)
+        return CompanyProfile.objects.filter(owner=user, status=CompanyProfile.Status.ACTIVE)
 
     @classmethod
     def user_has_profile_access(cls, user, profile):
@@ -131,11 +133,11 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     ):
         requested_profile = None
         if profile_id:
-            requested_profile = CompanyProfile.objects.filter(id=profile_id).first()
+            requested_profile = CompanyProfile.objects.filter(id=profile_id, status=CompanyProfile.Status.ACTIVE).first()
             if not requested_profile:
                 raise serializers.ValidationError({"profile_id": "Company profile not found."})
         elif company_code:
-            requested_profile = CompanyProfile.objects.filter(company_code__iexact=company_code).first()
+            requested_profile = CompanyProfile.objects.filter(company_code__iexact=company_code, status=CompanyProfile.Status.ACTIVE).first()
             if not requested_profile:
                 raise serializers.ValidationError({"company_code": "Invalid company code."})
 

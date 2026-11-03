@@ -345,7 +345,10 @@ class UserViewSet(viewsets.ModelViewSet):
     def quota_meta_data(self, request):
         profile = getattr(request.user, "profile", None)
         if profile is None and getattr(request.user, "profile_id", None):
-            profile = CompanyProfile.objects.filter(id=request.user.profile_id).first()
+            profile = CompanyProfile.objects.filter(
+                id=request.user.profile_id,
+                status=CompanyProfile.Status.ACTIVE,
+            ).first()
         meta_data = MyTokenObtainPairSerializer._subscription_metadata(profile) if profile else {}
         serializer = self.get_serializer(instance=meta_data)
         return Response(serializer.data)
@@ -363,6 +366,8 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         target = self.get_object()
+        if CompanyProfile.objects.filter(owner=target, status=CompanyProfile.Status.ACTIVE).exists():
+            raise PermissionDenied('This account owns an active workspace and cannot be deleted until that workspace is deleted or transferred.')
         if target.pk == request.user.pk:
             raise PermissionDenied('You cannot delete your own administrator account.')
         if target.is_superuser and not request.user.is_superuser:
@@ -398,7 +403,7 @@ class UserViewSet(viewsets.ModelViewSet):
     def admin_summary(self, request):
         """Return platform-level identity and workspace counts for staff insight dashboards."""
         users = User.objects.all()
-        profiles = CompanyProfile.objects.all()
+        profiles = CompanyProfile.objects.filter(status=CompanyProfile.Status.ACTIVE)
         memberships = CompanyMembership.objects.all()
         return Response({
             'generated_at': timezone.now().isoformat(),

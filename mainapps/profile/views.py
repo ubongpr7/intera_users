@@ -513,6 +513,9 @@ class CompanyProfileViewSet(PermissionRequiredMixin, viewsets.ModelViewSet):
         queryset = super().get_queryset()
         if getattr(self, "swagger_fake_view", False):
             return queryset.none()
+        # Deleted workspaces are retained for audit/retention but are never
+        # exposed through normal workspace lists or detail endpoints.
+        queryset = queryset.filter(status=CompanyProfile.Status.ACTIVE)
         if self.request.user.is_staff:
             return queryset
 
