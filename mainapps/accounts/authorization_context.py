@@ -217,6 +217,7 @@ def issue_authorization_context(
     support_grant=None,
     platform=PlatformChoices.INTERA_IMS,
     access_token_id=None,
+    permissions=(),
 ) -> str:
     now = datetime.now(timezone.utc)
     # Authorization contexts carry only identity and scope metadata. Detailed
@@ -248,6 +249,13 @@ def issue_authorization_context(
         "is_support": bool(getattr(user, "is_support", False)),
         "is_owner": bool(profile and profile.owner_id == user.id),
     }
+    requested_permissions = sorted({str(item).strip() for item in (permissions or ()) if str(item).strip()})
+    if requested_permissions:
+        # Only callers that have already evaluated the grant should request
+        # permission claims. MCP downstream services cannot query Users'
+        # database, so the signed context is the portable proof of the
+        # workspace-level agent grant.
+        payload["permissions"] = requested_permissions
     if platform == PlatformChoices.HOSPERATOR:
         payload["hosperator_care_site_scope"] = _hosperator_care_site_scope(user, profile)
     return jwt.encode(

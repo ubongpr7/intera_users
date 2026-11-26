@@ -7,7 +7,7 @@ def get_company_or_profile(user, profile_id=None, support_access_grant_id=None):
 
     if profile_id:
         profile = CompanyProfile.objects.filter(id=profile_id).first()
-        if not profile:
+        if not profile or profile.status != CompanyProfile.Status.ACTIVE:
             return None
         if profile.owner_id == user.id:
             return profile
@@ -23,7 +23,7 @@ def get_company_or_profile(user, profile_id=None, support_access_grant_id=None):
 
     if user.profile_id:
         profile = CompanyProfile.objects.filter(id=user.profile_id).first()
-        if profile and (
+        if profile and profile.status == CompanyProfile.Status.ACTIVE and (
             profile.owner_id == user.id
             or user.company_memberships.filter(profile=profile, is_active=True).exists()
         ):
@@ -37,11 +37,14 @@ def get_company_or_profile(user, profile_id=None, support_access_grant_id=None):
             if support_grant:
                 return profile
 
-    owned_company = user.owned_companies.order_by("-created_at").first()
+    owned_company = user.owned_companies.filter(status=CompanyProfile.Status.ACTIVE).order_by("-created_at").first()
     if owned_company:
         return owned_company
 
-    membership = user.company_memberships.filter(is_active=True).select_related("profile").first()
+    membership = user.company_memberships.filter(
+        is_active=True,
+        profile__status=CompanyProfile.Status.ACTIVE,
+    ).select_related("profile").first()
     if membership:
         return membership.profile
 

@@ -68,7 +68,9 @@ def _serialize_company_profile(profile: CompanyProfile) -> dict[str, Any]:
         "headquarters_address": _serialize_headquarters_address(profile),
         "industry": profile.industry,
         "owner_user_id": profile.owner_id,
-        "is_active": True,
+        "is_active": profile.status == CompanyProfile.Status.ACTIVE,
+        "status": profile.status,
+        "deleted_at": profile.deleted_at.isoformat() if profile.deleted_at else None,
     }
 
 

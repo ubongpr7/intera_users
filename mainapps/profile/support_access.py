@@ -43,6 +43,7 @@ def get_active_support_grant(
     current_time = at_time or timezone.now()
     grants = SupportAccessGrant.objects.select_related("profile", "grantee_user").filter(
         grantee_user=user,
+        profile__status=CompanyProfile.Status.ACTIVE,
         revoked_at__isnull=True,
         starts_at__lte=current_time,
         expires_at__gt=current_time,
@@ -70,6 +71,7 @@ def list_support_access_grants(user, *, at_time=None) -> list[SupportAccessGrant
         SupportAccessGrant.objects.select_related("profile")
         .filter(
             grantee_user=user,
+            profile__status=CompanyProfile.Status.ACTIVE,
             revoked_at__isnull=True,
             starts_at__lte=current_time,
             expires_at__gt=current_time,
@@ -88,11 +90,15 @@ def list_support_access_grants(user, *, at_time=None) -> list[SupportAccessGrant
 def list_accessible_profile_contexts(user) -> list[ResolvedProfileAccess]:
     contexts_by_profile_id: dict[str, ResolvedProfileAccess] = {}
 
-    for profile in CompanyProfile.objects.filter(owner=user).order_by("name"):
+    for profile in CompanyProfile.objects.filter(owner=user, status=CompanyProfile.Status.ACTIVE).order_by("name"):
         contexts_by_profile_id[str(profile.id)] = ResolvedProfileAccess(profile=profile)
 
     memberships = (
-        CompanyMembership.objects.filter(user=user, is_active=True)
+        CompanyMembership.objects.filter(
+            user=user,
+            is_active=True,
+            profile__status=CompanyProfile.Status.ACTIVE,
+        )
         .select_related("profile")
         .order_by("profile__name")
     )
@@ -130,6 +136,9 @@ def resolve_profile_access(
         if support_grant:
             requested_profile = support_grant.profile
 
+    if requested_profile and requested_profile.status != CompanyProfile.Status.ACTIVE:
+        return ResolvedProfileAccess(profile=None)
+
     if requested_profile:
         if user_has_direct_profile_access(user, requested_profile):
             return ResolvedProfileAccess(profile=requested_profile)
@@ -145,7 +154,7 @@ def resolve_profile_access(
 
     if user.profile_id:
         current_profile = CompanyProfile.objects.filter(id=user.profile_id).first()
-        if current_profile:
+        if current_profile and current_profile.status == CompanyProfile.Status.ACTIVE:
             if user_has_direct_profile_access(user, current_profile):
                 return ResolvedProfileAccess(profile=current_profile)
             support_grant = get_active_support_grant(

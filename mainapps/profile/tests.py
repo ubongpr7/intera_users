@@ -6,6 +6,7 @@ from unittest.mock import patch
 from http import HTTPStatus
 
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import UntypedToken
@@ -126,14 +127,31 @@ class CompanyProfileActionTests(TestCase):
     def test_deleting_workspace_detaches_users_without_deleting_them(self):
         owner = User.objects.create_user("workspace-owner@example.com", password="StrongPassword123!")
         profile = CompanyProfile.objects.create(owner=owner, name="Disposable Workspace")
+        member = User.objects.create_user("workspace-member@example.com", password="StrongPassword123!")
+        membership = CompanyMembership.objects.create(
+            user=member,
+            profile=profile,
+            role=CompanyMembership.MembershipRole.MEMBER,
+            is_active=True,
+        )
         owner.profile = profile
         owner.save(update_fields=["profile"])
 
         profile.delete()
 
+        profile.refresh_from_db()
         owner.refresh_from_db()
+        membership.refresh_from_db()
         self.assertTrue(User.objects.filter(pk=owner.pk).exists())
         self.assertIsNone(owner.profile_id)
+        self.assertEqual(profile.status, CompanyProfile.Status.DELETED)
+        self.assertIsNotNone(profile.deleted_at)
+        self.assertFalse(membership.is_active)
+        self.assertTrue(CompanyProfile.objects.filter(pk=profile.pk).exists())
+
+        profile.status = CompanyProfile.Status.ACTIVE
+        with self.assertRaises(ValidationError):
+            profile.save(update_fields=["status"])
 
     def test_platform_admin_can_list_and_verify_workspaces(self):
         response = self.client.get("/management/profiles/")

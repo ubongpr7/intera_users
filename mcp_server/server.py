@@ -32,6 +32,8 @@ from starlette.routing import Mount, Route
 import uvicorn
 
 from mainapps.accounts.models import User
+from mainapps.accounts.authorization_context import evaluate_permission_grants, has_workspace_admin_access
+from mainapps.permit.models import PlatformChoices
 from mainapps.profile.models import CompanyInvitation, CompanyMembership, CompanyProfile, StaffGroup, StaffRoleAssignment
 from mainapps.profile import payloads as profile_payloads
 from mainapps.profile.views import CompanyInvitationViewSet, CompanyProfileViewSet, StaffGroupViewSet, StaffRoleViewSet
@@ -94,16 +96,43 @@ def get_current_principal(*, required: bool = False) -> UsersMcpPrincipal | None
     return principal
 
 
+def require_agent_access(principal: UsersMcpPrincipal) -> None:
+    """Require explicit workspace approval for every agent-driven MCP call."""
+    if principal.claims.get("client_id") != "intera-cli" or principal.claims.get("token_use") != "mcp":
+        raise PermissionError("This access token was not issued for the Intera MCP client.")
+    permissions = principal.permissions
+    # Administrative status is not an MCP consent grant.  Owners/admins are
+    # granted the MCP permission during the browser approval/token issuance
+    # flow; a normal web token must never become an agent token merely because
+    # it belongs to staff or a superuser.
+    if "interact_with_agent" in permissions or "*" in permissions:
+        return
+    raise PermissionError("You do not have permission to use Intera AI in this workspace.")
+
+
 def _merge_authorization_context(claims: dict[str, Any], context_token: str | None) -> dict[str, Any]:
     if not context_token:
         return claims
-    context = dict(UntypedToken(context_token).payload)
+    # Use the same issuer/audience/expiry validation as the HTTP API.  A
+    # signed token from the wrong issuer or audience must not become a source
+    # of MCP permissions merely because its signature is valid.
+    from mainapps.accounts.authorization_context import decode_authorization_context
+
+    context = decode_authorization_context(context_token)
     if (
-        context.get("token_type") != "intera_authorization_context"
-        or str(context.get("user_id") or "") != str(claims.get("user_id") or claims.get("sub") or "")
+        str(context.get("user_id") or "") != str(claims.get("user_id") or claims.get("sub") or "")
         or str(context.get("profile_id") or "") != str(claims.get("profile_id") or "")
     ):
         raise RuntimeError("Authorization context does not match the access token.")
+    expected = access_context_hash(
+        user_id=claims.get("user_id") or claims.get("sub"),
+        profile_id=claims.get("profile_id"),
+        session_version=claims.get("session_version"),
+        platform=claims.get("platform", PlatformChoices.INTERA_IMS),
+        access_token_id=claims.get("jti"),
+    )
+    if context.get("access_context_hash") != expected:
+        raise RuntimeError("Authorization context is not bound to the access token.")
     permissions = set(claims.get("permissions") or []) | set(context.get("permissions") or [])
     for wildcard in context.get("wildcards") or []:
         permissions.update((context.get("wildcard_permissions") or {}).get(wildcard) or [])
@@ -149,7 +178,8 @@ class UsersMcpAuthMiddleware:
         headers = Headers(scope=scope)
         auth_header = headers.get("authorization")
         if not auth_header:
-            await self.app(scope, receive, send)
+            response = JSONResponse({"detail": "Authorization is required."}, status_code=401)
+            await response(scope, receive, send)
             return
 
         token = _extract_bearer_token(auth_header)
@@ -160,8 +190,13 @@ class UsersMcpAuthMiddleware:
 
         try:
             principal = _build_principal_from_token(token, headers.get("x-intera-authorization-context"))
+            # Enforce the approval at the transport boundary. Tool-level checks
+            # remain useful for writes, but reads must not be reachable through
+            # a normal workspace token that was never approved for MCP access.
+            require_agent_access(principal)
         except Exception as exc:
-            response = JSONResponse({"detail": str(exc)}, status_code=401)
+            status_code = 403 if isinstance(exc, PermissionError) else 401
+            response = JSONResponse({"detail": str(exc)}, status_code=status_code)
             await response(scope, receive, send)
             return
 
@@ -187,7 +222,12 @@ def _address_payload(address: Any) -> dict[str, Any] | None:
     }
 
 
-def _company_profile_payload(profile: CompanyProfile, *, principal_user_id: int) -> dict[str, Any]:
+def _company_profile_payload(
+    profile: CompanyProfile,
+    *,
+    principal_user_id: int,
+    can_use_agent: bool | None = None,
+) -> dict[str, Any]:
     agent_configured = False
     agent_cache = getattr(profile._state, "fields_cache", {}).get("agent")
     if agent_cache is not None:
@@ -222,8 +262,38 @@ def _company_profile_payload(profile: CompanyProfile, *, principal_user_id: int)
         "role_count": int(getattr(profile, "active_role_count", 0)),
         "group_count": int(getattr(profile, "active_group_count", 0)),
         "agent_configured": agent_configured,
+        **({"can_use_agent": can_use_agent} if can_use_agent is not None else {}),
         "headquarters_address": _address_payload(profile.headquarters_address),
     }
+
+
+def _can_use_agent_for_profile(
+    *,
+    principal: UsersMcpPrincipal,
+    user: User | None,
+    profile: CompanyProfile,
+) -> bool:
+    """Resolve the same workspace grant used by the MCP connect approval flow."""
+    if user is not None:
+        grants = evaluate_permission_grants(
+            user,
+            profile=profile,
+            platform=PlatformChoices.INTERA_IMS,
+            permissions=["interact_with_agent"],
+        )
+        if grants.get("interact_with_agent") or has_workspace_admin_access(user, profile):
+            return True
+
+    # The active MCP token is already profile-scoped and was issued only after
+    # the connect approval flow passed this same decision. Keep that invariant
+    # visible even if a long-lived worker has a stale database connection.
+    if profile.id == principal.profile_id:
+        return (
+            "interact_with_agent" in principal.permissions
+            or "*" in principal.permissions
+            or str(principal.claims.get("membership_role") or "").lower() in {"owner", "admin"}
+        )
+    return False
 
 
 def _staff_payload(user: User, *, active_profile_id: int) -> dict[str, Any]:
@@ -281,7 +351,9 @@ def _invitation_payload(invitation: CompanyInvitation) -> dict[str, Any]:
 def _accessible_profile_queryset(*, principal: UsersMcpPrincipal):
     principal_user_id = coerce_identity_id(principal.user_id)
     return (
-        CompanyProfile.objects.select_related("owner", "headquarters_address", "agent")
+        CompanyProfile.objects.filter(status=CompanyProfile.Status.ACTIVE).select_related(
+            "owner", "headquarters_address", "agent"
+        )
         .prefetch_related(
             Prefetch(
                 "memberships",
@@ -309,28 +381,45 @@ def _list_accessible_company_profiles_sync(
     query: str | None,
     limit: int,
 ) -> dict[str, Any]:
-    principal_user_id = coerce_identity_id(principal.user_id)
-    queryset = _accessible_profile_queryset(principal=principal)
-    term = str(query or "").strip()
-    if term:
-        queryset = queryset.filter(
-            Q(name__icontains=term)
-            | Q(company_code__icontains=term)
-            | Q(email__icontains=term)
-            | Q(phone__icontains=term)
-            | Q(description__icontains=term)
-        )
+    # MCP workers are long-lived. Recycle stale Django connections before and
+    # after the query so a database connection dropped while the worker was
+    # idle does not surface as a misleading MCP "connection is closed" error.
+    close_old_connections()
+    try:
+        principal_user_id = coerce_identity_id(principal.user_id)
+        queryset = _accessible_profile_queryset(principal=principal)
+        term = str(query or "").strip()
+        if term:
+            queryset = queryset.filter(
+                Q(name__icontains=term)
+                | Q(company_code__icontains=term)
+                | Q(email__icontains=term)
+                | Q(phone__icontains=term)
+                | Q(description__icontains=term)
+            )
 
-    profiles = list(queryset[:limit])
-    return {
-        "query": term or None,
-        "count": len(profiles),
-        "limit": limit,
-        "active_profile_id": principal.profile_id,
-        "results": [
-            _company_profile_payload(profile, principal_user_id=principal_user_id or 0) for profile in profiles
-        ],
-    }
+        profiles = list(queryset[:limit])
+        user = User.objects.filter(pk=principal_user_id).first()
+        return {
+            "query": term or None,
+            "count": len(profiles),
+            "limit": limit,
+            "active_profile_id": principal.profile_id,
+            "results": [
+                _company_profile_payload(
+                    profile,
+                    principal_user_id=principal_user_id or 0,
+                    can_use_agent=_can_use_agent_for_profile(
+                        principal=principal,
+                        user=user,
+                        profile=profile,
+                    ),
+                )
+                for profile in profiles
+            ],
+        }
+    finally:
+        close_old_connections()
 
 
 def _get_active_company_profile_sync(*, principal: UsersMcpPrincipal) -> dict[str, Any]:
@@ -651,6 +740,10 @@ def _invoke_view_action_sync(
     close_old_connections()
     factory = APIRequestFactory()
     http_method = method.lower().strip()
+    if http_method not in {"get", "head", "options"}:
+        # Staff invitations and other user-service writes must honor the same
+        # workspace-level agent grant as the operational services.
+        require_agent_access(principal)
     path = "/mcp/internal"
     request_headers = {
         "HTTP_AUTHORIZATION": f"Bearer {principal.token}",

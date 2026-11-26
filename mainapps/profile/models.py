@@ -3,7 +3,7 @@ import secrets
 import string
 import uuid
 from cryptography.fernet import Fernet
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.db.models.signals import m2m_changed
@@ -66,12 +66,32 @@ class Industry(models.TextChoices):
     AUTOMOTIVE = 'Automotive', _('Automotive')
     OTHER = 'Other', _('Other')
 
+class CompanyProfileQuerySet(models.QuerySet):
+    def delete(self):
+        """Never physically delete workspace records through a queryset."""
+        deleted = 0
+        for profile in self:
+            profile.delete()
+            deleted += 1
+        return deleted, {"profile.CompanyProfile": deleted}
+
+
+class CompanyProfileManager(models.Manager.from_queryset(CompanyProfileQuerySet)):
+    pass
+
+
 class CompanyProfile(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = "active", _("Active")
+        DELETED = "deleted", _("Deleted")
+
     class Meta:
         """Metaclass defines extra model options."""
 
         ordering = ['name']
         verbose_name_plural = 'Company Profile'
+
+    objects = CompanyProfileManager()
 
     po_sequence = models.PositiveIntegerField(default=0)
     inventory_sequence = models.PositiveIntegerField(default=0)
@@ -246,12 +266,26 @@ class CompanyProfile(models.Model):
 
     updated_at = models.DateTimeField(auto_now=True)
 
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+        db_index=True,
+    )
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
     @staticmethod
     def generate_company_code(length: int = 12) -> str:
         alphabet = string.ascii_uppercase + string.digits
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
     def save(self, *args, **kwargs):
+        if self.pk and not self._state.adding:
+            previous_status = type(self).objects.filter(pk=self.pk).values_list("status", flat=True).first()
+            if previous_status == self.Status.DELETED and self.status != self.Status.DELETED:
+                raise ValidationError("A deleted workspace cannot be reopened.")
+        if self.status == self.Status.DELETED and self.deleted_at is None:
+            self.deleted_at = timezone.now()
         if not self.company_code:
             while True:
                 candidate = self.generate_company_code()
@@ -259,6 +293,51 @@ class CompanyProfile(models.Model):
                     self.company_code = candidate
                     break
         super().save(*args, **kwargs)
+
+    def delete(self, using=None, keep_parents=False):
+        """Soft-delete the workspace while retaining all business data."""
+        del keep_parents
+        if self.status == self.Status.DELETED:
+            return (0, {"profile.CompanyProfile": 0})
+
+        now = timezone.now()
+        with transaction.atomic(using=using):
+            CompanyMembership.objects.filter(profile_id=self.pk, is_active=True).update(
+                is_active=False,
+                updated_at=now,
+            )
+            SupportAccessGrant.objects.filter(
+                profile_id=self.pk,
+                status__in=[SupportAccessGrant.Status.PENDING, SupportAccessGrant.Status.ACTIVE],
+                revoked_at__isnull=True,
+            ).update(
+                status=SupportAccessGrant.Status.REVOKED,
+                revoked_at=now,
+                updated_at=now,
+            )
+            CompanyInvitation.objects.filter(
+                profile_id=self.pk,
+                status=CompanyInvitation.InvitationStatus.PENDING,
+            ).update(
+                status=CompanyInvitation.InvitationStatus.REVOKED,
+                responded_at=now,
+                updated_at=now,
+            )
+            TrustedWorkspaceDevice.objects.filter(
+                profile_id=self.pk,
+                is_active=True,
+            ).update(
+                is_active=False,
+                is_revoked=True,
+                revoked_at=now,
+                updated_at=now,
+            )
+            from mainapps.accounts.models import User as AccountUser
+            AccountUser.objects.filter(profile_id=self.pk).update(profile=None)
+            self.status = self.Status.DELETED
+            self.deleted_at = now
+            self.save(update_fields=["status", "deleted_at", "updated_at"])
+        return (1, {"profile.CompanyProfile": 1})
 
     def get_staff_roles(self):
         return StaffRole.objects.for_profile(self)

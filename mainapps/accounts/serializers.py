@@ -22,6 +22,7 @@ from mainapps.profile.support_access import (
 )
 from subapps.kafka.producers import build_actor, publish_support_access_workspace_entered
 from .authorization_context import (
+    evaluate_permission_grants,
     has_hosperator_workspace_admin_access,
     has_workspace_admin_access,
     issue_authorization_context,
@@ -85,11 +86,13 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     @classmethod
     def _active_memberships(cls, user):
-        return CompanyMembership.objects.filter(user=user, is_active=True).select_related("profile")
+        return CompanyMembership.objects.filter(
+            user=user, is_active=True, profile__status=CompanyProfile.Status.ACTIVE
+        ).select_related("profile")
 
     @classmethod
     def _owned_profiles(cls, user):
-        return CompanyProfile.objects.filter(owner=user)
+        return CompanyProfile.objects.filter(owner=user, status=CompanyProfile.Status.ACTIVE)
 
     @classmethod
     def user_has_profile_access(cls, user, profile):
@@ -131,11 +134,11 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     ):
         requested_profile = None
         if profile_id:
-            requested_profile = CompanyProfile.objects.filter(id=profile_id).first()
+            requested_profile = CompanyProfile.objects.filter(id=profile_id, status=CompanyProfile.Status.ACTIVE).first()
             if not requested_profile:
                 raise serializers.ValidationError({"profile_id": "Company profile not found."})
         elif company_code:
-            requested_profile = CompanyProfile.objects.filter(company_code__iexact=company_code).first()
+            requested_profile = CompanyProfile.objects.filter(company_code__iexact=company_code, status=CompanyProfile.Status.ACTIVE).first()
             if not requested_profile:
                 raise serializers.ValidationError({"company_code": "Invalid company code."})
 
@@ -564,12 +567,24 @@ class TokenRefreshSerializer(BaseTokenRefreshSerializer):
             platform=platform,
         )
         data["access"] = str(custom_access)
+        context_permissions = []
+        if active_access.profile and platform == PlatformChoices.INTERA_IMS:
+            grants = evaluate_permission_grants(
+                user,
+                profile=active_access.profile,
+                support_grant=active_access.support_grant,
+                platform=platform,
+                permissions=["interact_with_agent"],
+            )
+            if grants.get("interact_with_agent") or has_workspace_admin_access(user, active_access.profile):
+                context_permissions = ["interact_with_agent"]
         data["authorization_context"] = issue_authorization_context(
             user,
             profile=active_access.profile,
             support_grant=active_access.support_grant,
             platform=platform,
             access_token_id=custom_access.get("jti"),
+            permissions=context_permissions,
         )
         if "refresh" in data:
             data["refresh"] = str(custom_refresh)

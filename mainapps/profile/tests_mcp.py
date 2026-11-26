@@ -8,10 +8,12 @@ from starlette.testclient import TestClient
 from mainapps.accounts.models import User
 from mainapps.profile.models import CompanyProfile
 from mcp_server.server import (
+    UsersMcpPrincipal,
     _build_principal_from_token,
     _build_transport_security_settings,
     _company_profile_payload,
     _extract_bearer_token,
+    _invoke_view_action_sync,
     _principal_var,
     app as users_mcp_app,
     search_company_staff,
@@ -44,7 +46,9 @@ class UsersMcpAuthTests(SimpleTestCase):
         os.environ,
         {
             "ALLOWED_HOSTS": "users.mcp.interaims.com,users.interaims.com",
+            "USERS_MCP_ALLOWED_HOSTS": "users.mcp.interaims.com,users.interaims.com",
             "CORS_ALLOWED_ORIGINS": "http://localhost:3000,https://dev.interaims.com",
+            "USERS_MCP_ALLOWED_ORIGINS": "http://localhost:3000,https://dev.interaims.com",
         },
         clear=False,
     )
@@ -75,15 +79,34 @@ class UsersMcpSerializationTests(SimpleTestCase):
         setattr(profile, "active_memberships_for_mcp", [])
         profile._state.fields_cache["agent"] = object()
 
-        payload = _company_profile_payload(profile, principal_user_id=owner.id)
+        payload = _company_profile_payload(profile, principal_user_id=owner.id, can_use_agent=True)
 
         self.assertEqual(payload["name"], "Acme Retail")
         self.assertTrue(payload["is_owner"])
         self.assertEqual(payload["member_count"], 5)
         self.assertTrue(payload["agent_configured"])
+        self.assertTrue(payload["can_use_agent"])
 
 
 class UsersMcpToolTests(SimpleTestCase):
+    def test_mutating_view_bridge_requires_agent_access(self):
+        principal = UsersMcpPrincipal(
+            token="jwt-token",
+            claims={},
+            user_id="1",
+            profile_id=1,
+            company_code=None,
+            permissions=set(),
+        )
+        with self.assertRaises(PermissionError):
+            _invoke_view_action_sync(
+                principal=principal,
+                viewset_cls=object,
+                action="create",
+                method="post",
+                data={},
+            )
+
     def test_search_company_staff_requires_authenticated_context(self):
         token = _principal_var.set(None)
         try:
