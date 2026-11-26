@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import os
 import secrets
 from datetime import timedelta
 from io import BytesIO
@@ -14,7 +16,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from django.db.models import Q
 from django.db.models import Sum
 from decimal import Decimal
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlparse
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from drf_yasg import openapi
@@ -47,6 +49,8 @@ from subapps.kafka.producers import (
 from .serializers import SocialJWTSerializer
 from .authorization_context import (
     authorization_context_from_request,
+    evaluate_permission_grants,
+    has_workspace_admin_access,
     issue_authorization_context,
     issue_websocket_ticket,
     public_signing_jwks,
@@ -73,6 +77,8 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
     TokenVerifyView
 )
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
 
 
 class WebSocketTicketView(APIView):
@@ -1183,6 +1189,407 @@ class CompanyMembershipListView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+MCP_CONNECT_REQUEST_TTL = 10 * 60
+MCP_CONNECT_CODE_TTL = 60
+MCP_CONNECT_PERMISSION = "interact_with_agent"
+MCP_CONNECT_CLIENT_ID = "intera-cli"
+MCP_CONNECT_RATE_LIMIT = 30
+MCP_CONNECT_RATE_WINDOW = 60
+
+
+def _trusted_proxy_addresses() -> set[str]:
+    configured = os.getenv("MCP_TRUSTED_PROXY_IPS", "")
+    return {item.strip() for item in configured.split(",") if item.strip()}
+
+
+def _mcp_access_token_lifetime_seconds() -> int:
+    configured = int(getattr(settings, "MCP_CONNECT_ACCESS_TOKEN_LIFETIME_SECONDS", 300))
+    return max(60, min(configured, 3600))
+
+
+def _mcp_rate_limit(request, action: str) -> None:
+    """Apply a small abuse limit to unauthenticated MCP auth endpoints."""
+    remote_address = str(request.META.get("REMOTE_ADDR") or "unknown").strip()
+    # X-Forwarded-For is client-controlled unless the immediate peer is a
+    # trusted reverse proxy.  Do not let callers rotate a spoofed address to
+    # bypass the unauthenticated endpoint limit.
+    if remote_address in _trusted_proxy_addresses():
+        forwarded = str(request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",", 1)[0].strip()
+        address = forwarded or remote_address
+    else:
+        address = remote_address
+    key = f"mcp-connect-rate:{action}:{address}"
+    if not cache.add(key, 1, MCP_CONNECT_RATE_WINDOW):
+        try:
+            count = cache.incr(key)
+        except Exception:
+            count = MCP_CONNECT_RATE_LIMIT
+        if int(count) > MCP_CONNECT_RATE_LIMIT:
+            raise PermissionError("Too many MCP authentication attempts. Try again shortly.")
+
+
+def _mcp_frontend_origins() -> set[str]:
+    origins: set[str] = set()
+    configured = _mcp_connect_frontend_url()
+    parsed = urlparse(configured)
+    if parsed.scheme and parsed.netloc:
+        origins.add(f"{parsed.scheme}://{parsed.netloc}")
+    for origin in getattr(settings, "CORS_ALLOWED_ORIGINS", ()):
+        value = str(origin or "").strip().rstrip("/")
+        if value:
+            origins.add(value)
+    return origins
+
+
+def _validate_mcp_browser_request(request) -> None:
+    """Require the approval request to originate from an approved frontend."""
+    origin = str(request.META.get("HTTP_ORIGIN") or "").strip().rstrip("/")
+    referer = str(request.META.get("HTTP_REFERER") or "").strip()
+    referer_origin = ""
+    if referer:
+        parsed = urlparse(referer)
+        if parsed.scheme and parsed.netloc:
+            referer_origin = f"{parsed.scheme}://{parsed.netloc}"
+    approved = _mcp_frontend_origins()
+    supplied = origin or referer_origin
+    if supplied:
+        if supplied not in approved:
+            raise PermissionError("MCP approval must originate from the Intera frontend.")
+    elif not (getattr(settings, "DEBUG", False) or getattr(settings, "LOCAL_SERVER", False)):
+        raise PermissionError("MCP approval requires a browser Origin or Referer.")
+
+    csrf_cookie = request.COOKIES.get(getattr(settings, "CSRF_COOKIE_NAME", "csrftoken"))
+    csrf_header = request.META.get("HTTP_X_CSRFTOKEN") or request.META.get("HTTP_X_CSRF_TOKEN")
+    if csrf_cookie and (not csrf_header or not secrets.compare_digest(str(csrf_cookie), str(csrf_header))):
+        raise PermissionError("Invalid CSRF token for MCP approval.")
+
+
+def _mcp_family_key(family_id: str) -> str:
+    return f"mcp-connect-family-revoked:{family_id}"
+
+
+def _mcp_family_is_revoked(family_id: str | None) -> bool:
+    return bool(family_id and cache.get(_mcp_family_key(str(family_id))))
+
+
+def _revoke_mcp_family(family_id: str | None) -> None:
+    if family_id:
+        cache.set(_mcp_family_key(str(family_id)), True, 30 * 24 * 60 * 60)
+
+
+def _mcp_connect_frontend_url():
+    configured = (os.getenv("MCP_CONNECT_FRONTEND_URL") or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    if getattr(settings, "LOCAL_SERVER", False) or getattr(settings, "DEBUG", False):
+        return "http://localhost:3000/connect/mcp"
+    return "https://www.interaims.com/connect/mcp"
+
+
+def _mcp_loopback_redirect_uri(value):
+    parsed = urlparse(str(value or "").strip())
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    if parsed.path != "/callback" or parsed.query or parsed.fragment:
+        return None
+    if parsed.scheme == "https" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    return value
+
+
+def _mcp_client_id(value):
+    client_id = str(value or "").strip()
+    return client_id if client_id == MCP_CONNECT_CLIENT_ID else None
+
+
+def _mcp_pkce_challenge(verifier):
+    digest = hashlib.sha256(str(verifier).encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _mcp_workspace_options(user):
+    options = []
+    for item in MyTokenObtainPairSerializer.list_accessible_profile_contexts(user):
+        profile = item.profile
+        grants = evaluate_permission_grants(
+            user,
+            profile=profile,
+            platform=PlatformChoices.INTERA_IMS,
+            permissions=[MCP_CONNECT_PERMISSION],
+        )
+        can_use_agent = bool(grants.get(MCP_CONNECT_PERMISSION)) or has_workspace_admin_access(user, profile)
+        options.append({
+            "id": str(profile.id),
+            "name": profile.name or profile.company_code or str(profile.id),
+            "company_code": profile.company_code,
+            "can_use_agent": can_use_agent,
+        })
+    return options
+
+
+class McpConnectStartView(APIView):
+    """Create a short-lived browser connection request for a CLI client."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            _mcp_rate_limit(request, "start")
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        data = request.data if isinstance(request.data, dict) else {}
+        client_id = _mcp_client_id(data.get("client_id"))
+        redirect_uri = _mcp_loopback_redirect_uri(data.get("redirect_uri"))
+        code_challenge = str(data.get("code_challenge") or "").strip()
+        if not client_id or not redirect_uri or len(code_challenge) < 43:
+            return Response(
+                {"detail": "A loopback redirect_uri and S256 code_challenge are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        request_id = secrets.token_urlsafe(32)
+        state = str(data.get("state") or secrets.token_urlsafe(24))
+        preferred_profile_id = str(data.get("preferred_profile_id") or "").strip() or None
+        cache.set(
+            f"mcp-connect-request:{request_id}",
+            {
+                "state": state,
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "code_challenge": code_challenge,
+                "preferred_profile_id": preferred_profile_id,
+            },
+            MCP_CONNECT_REQUEST_TTL,
+        )
+        query_values = {"request_id": request_id}
+        if preferred_profile_id:
+            query_values["profile_id"] = preferred_profile_id
+        query = urlencode(query_values)
+        return Response(
+            {
+                "request_id": request_id,
+                "state": state,
+                "expires_in": MCP_CONNECT_REQUEST_TTL,
+                "frontend_url": f"{_mcp_connect_frontend_url()}?{query}",
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class McpConnectWorkspacesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        request_id = str(request.query_params.get("request_id") or "").strip()
+        if not request_id or not cache.get(f"mcp-connect-request:{request_id}"):
+            return Response({"detail": "Invalid or expired MCP connection request."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"workspaces": _mcp_workspace_options(request.user)}, status=status.HTTP_200_OK)
+
+
+class McpConnectApproveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            _validate_mcp_browser_request(request)
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        data = request.data if isinstance(request.data, dict) else {}
+        request_id = str(data.get("request_id") or "").strip()
+        profile_id = str(data.get("profile_id") or "").strip()
+        request_data = cache.get(f"mcp-connect-request:{request_id}")
+        if not request_data or not profile_id:
+            return Response({"detail": "Invalid or expired MCP connection request."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
+            request.user,
+            profile_id=profile_id,
+        )
+        profile = profile_access.profile
+        if not profile:
+            return Response({"detail": "Workspace is not accessible."}, status=status.HTTP_403_FORBIDDEN)
+        grants = evaluate_permission_grants(
+            request.user,
+            profile=profile,
+            platform=PlatformChoices.INTERA_IMS,
+            permissions=[MCP_CONNECT_PERMISSION],
+        )
+        if not grants.get(MCP_CONNECT_PERMISSION) and not has_workspace_admin_access(request.user, profile):
+            return Response(
+                {"detail": "You do not have permission to use Intera AI in this workspace.", "permission": MCP_CONNECT_PERMISSION},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        code = secrets.token_urlsafe(48)
+        cache.set(
+            f"mcp-connect-code:{code}",
+            {
+                **request_data,
+                "user_id": str(request.user.id),
+                "profile_id": str(profile.id),
+            },
+            MCP_CONNECT_CODE_TTL,
+        )
+        # A browser connection request authorizes one approval only. The
+        # authorization code itself is also one-time, but retaining the
+        # request would allow repeated approvals during its TTL.
+        cache.delete(f"mcp-connect-request:{request_id}")
+        redirect = f"{request_data['redirect_uri']}?{urlencode({'code': code, 'state': request_data['state']})}"
+        return Response({"redirect_uri": redirect, "expires_in": MCP_CONNECT_CODE_TTL}, status=status.HTTP_200_OK)
+
+
+class McpConnectTokenView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            _mcp_rate_limit(request, "token")
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        data = request.data if isinstance(request.data, dict) else {}
+        code = str(data.get("code") or "").strip()
+        verifier = str(data.get("code_verifier") or "").strip()
+        payload = cache.get(f"mcp-connect-code:{code}") if code else None
+        client_id = _mcp_client_id(data.get("client_id"))
+        redirect_uri = _mcp_loopback_redirect_uri(data.get("redirect_uri"))
+        if (
+            not payload
+            or not verifier
+            or not client_id
+            or redirect_uri != payload.get("redirect_uri")
+            or client_id != payload.get("client_id")
+            or _mcp_pkce_challenge(verifier) != payload.get("code_challenge")
+        ):
+            return Response({"detail": "Invalid or expired MCP authorization code."}, status=status.HTTP_400_BAD_REQUEST)
+        cache.delete(f"mcp-connect-code:{code}")
+
+        user = User.objects.filter(id=payload.get("user_id"), is_active=True).first()
+        if not user:
+            return Response({"detail": "User is no longer active."}, status=status.HTTP_401_UNAUTHORIZED)
+        profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
+            user,
+            profile_id=payload.get("profile_id"),
+        )
+        profile = profile_access.profile
+        grants = evaluate_permission_grants(
+            user,
+            profile=profile,
+            platform=PlatformChoices.INTERA_IMS,
+            permissions=[MCP_CONNECT_PERMISSION],
+        ) if profile else {}
+        if not profile or (
+            not grants.get(MCP_CONNECT_PERMISSION)
+            and not has_workspace_admin_access(user, profile)
+        ):
+            return Response({"detail": "Agent access is no longer available for this workspace."}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response(_issue_mcp_tokens(user, profile), status=status.HTTP_200_OK)
+
+
+def _issue_mcp_tokens(user, profile, *, family_id: str | None = None):
+    """Issue short-lived, MCP-specific tokens after revalidated workspace access."""
+    refresh, access = MyTokenObtainPairSerializer.issue_tokens_for_profile(
+        user,
+        profile,
+        platform=PlatformChoices.INTERA_IMS,
+    )
+    refresh["client_id"] = MCP_CONNECT_CLIENT_ID
+    refresh["token_use"] = "mcp"
+    refresh["mcp_family_id"] = family_id or secrets.token_urlsafe(24)
+    access["client_id"] = MCP_CONNECT_CLIENT_ID
+    access["token_use"] = "mcp"
+    access["mcp_family_id"] = refresh["mcp_family_id"]
+    access.set_exp(lifetime=timedelta(seconds=_mcp_access_token_lifetime_seconds()))
+    return {
+        "access_token": str(access),
+        "refresh_token": str(refresh),
+        "token_type": "Bearer",
+        "expires_in": int(access["exp"] - access["iat"]),
+        "workspace_id": str(profile.id),
+        "workspace_name": profile.name,
+        "authorization_context": issue_authorization_context(
+            user,
+            profile=profile,
+            platform=PlatformChoices.INTERA_IMS,
+            access_token_id=access.get("jti"),
+            permissions=[MCP_CONNECT_PERMISSION],
+        ),
+    }
+
+
+class McpConnectRefreshView(APIView):
+    """Rotate an MCP refresh token and recheck workspace agent access."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            _mcp_rate_limit(request, "refresh")
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        raw_refresh = str((request.data or {}).get("refresh_token") or "").strip()
+        family_id = None
+        if not raw_refresh:
+            return Response({"detail": "An MCP refresh token is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            refresh = RefreshToken(raw_refresh)
+            family_id = str(refresh.get("mcp_family_id") or "").strip() or None
+            if refresh.get("token_use") != "mcp" or _mcp_family_is_revoked(family_id):
+                raise TokenError("The MCP refresh-token family is revoked.")
+            refresh.check_blacklist()
+        except Exception:
+            # Reuse of a rotated token revokes the complete family, not only
+            # the individual token that was replayed.
+            _revoke_mcp_family(family_id)
+            return Response({"detail": "Invalid or expired MCP refresh token."}, status=status.HTTP_400_BAD_REQUEST)
+        # MCP refresh tokens are client-bound. Accepting a generic refresh
+        # token here would let another client exchange it for an MCP session.
+        if refresh.get("client_id") != MCP_CONNECT_CLIENT_ID:
+            return Response({"detail": "This refresh token is not an Intera CLI token."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = User.objects.filter(id=refresh.get("user_id"), is_active=True).first()
+        profile_access = MyTokenObtainPairSerializer.resolve_active_profile_access(
+            user,
+            profile_id=refresh.get("profile_id"),
+        ) if user else None
+        profile = profile_access.profile if profile_access else None
+        grants = evaluate_permission_grants(
+            user,
+            profile=profile,
+            platform=PlatformChoices.INTERA_IMS,
+            permissions=[MCP_CONNECT_PERMISSION],
+        ) if user and profile else {}
+        if not user or not profile or (
+            not grants.get(MCP_CONNECT_PERMISSION)
+            and not has_workspace_admin_access(user, profile)
+        ):
+            return Response({"detail": "Agent access is no longer available for this workspace."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            refresh.blacklist()
+        except Exception:
+            return Response({"detail": "The MCP refresh token could not be rotated."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_issue_mcp_tokens(user, profile, family_id=family_id), status=status.HTTP_200_OK)
+
+
+class McpConnectRevokeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        try:
+            _mcp_rate_limit(request, "revoke")
+        except PermissionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        raw_refresh = str((request.data or {}).get("refresh_token") or "").strip()
+        if raw_refresh:
+            try:
+                refresh = RefreshToken(raw_refresh)
+                _revoke_mcp_family(str(refresh.get("mcp_family_id") or "").strip() or None)
+                refresh.blacklist()
+            except Exception:
+                pass
+        return Response({"revoked": True}, status=status.HTTP_200_OK)
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):

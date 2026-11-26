@@ -45,6 +45,17 @@ class HosperatorPlatformContextTests(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertEqual(serializer.validated_data["platform"], PlatformChoices.HOSPERATOR)
 
+    def test_mcp_context_can_carry_only_the_grants_already_checked_by_users(self):
+        context = decode_authorization_context(
+            issue_authorization_context(
+                self.owner,
+                profile=self.profile,
+                permissions=["interact_with_agent", "interact_with_agent"],
+            )
+        )
+
+        self.assertEqual(context["permissions"], ["interact_with_agent"])
+
     def test_hosperator_workspace_admin_context_carries_workspace_site_scope(self):
         admin = User.objects.create_user(
             email="hosperator-admin@example.com",
