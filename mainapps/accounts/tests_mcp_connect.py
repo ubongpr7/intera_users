@@ -136,6 +136,33 @@ class McpConnectWorkspaceTests(TestCase):
         self.assertEqual(approve_response.status_code, 200)
         self.assertIn("code=", approve_response.data["redirect_uri"])
 
+    def test_bearer_authenticated_approval_does_not_require_cookie_csrf_header(self):
+        self.client.force_authenticate(user=self.user)
+        approve_response = self.client.post(
+            "/auth/mcp/connect/approve/",
+            {"request_id": self.request_id, "profile_id": str(self.profile.id)},
+            format="json",
+            HTTP_ORIGIN="https://dev.interaims.com",
+            HTTP_AUTHORIZATION="Bearer test-mcp-access-token",
+            HTTP_COOKIE="csrftoken=stale-browser-token",
+        )
+
+        self.assertEqual(approve_response.status_code, 200)
+        self.assertIn("code=", approve_response.data["redirect_uri"])
+
+    def test_cookie_authenticated_approval_still_requires_csrf_header(self):
+        self.client.force_authenticate(user=self.user)
+        approve_response = self.client.post(
+            "/auth/mcp/connect/approve/",
+            {"request_id": self.request_id, "profile_id": str(self.profile.id)},
+            format="json",
+            HTTP_ORIGIN="https://dev.interaims.com",
+            HTTP_COOKIE="csrftoken=stale-browser-token",
+        )
+
+        self.assertEqual(approve_response.status_code, 403)
+        self.assertEqual(approve_response.data["detail"], "Invalid CSRF token for MCP approval.")
+
     def test_member_without_agent_grant_can_see_workspace_but_cannot_approve(self):
         member = User.objects.create_user(email="mcp-member@example.com", password="password123")
         CompanyMembership.objects.create(
