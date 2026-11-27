@@ -22,10 +22,10 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: ${{ inputs.target_environment || (github.ref_name == 'main' && 'prod' || 'dev') }}
+    environment: ${{ inputs.target_environment || (github.ref_name == 'main' && 'prod' || 'dev') }}
+
     steps:
-      - name: Checkout
+      - name: Check out source
         uses: actions/checkout@v4
 
       - name: Configure SSH
@@ -85,24 +85,19 @@ jobs:
           set -euo pipefail
           /usr/local/bin/interaims-host-init
           cd "${DEPLOY_PATH}"
+          docker compose -f "${COMPOSE_FILE}" --profile release build
           case "${REPOSITORY_NAME}" in
+            kafka_a2a)
+              ;;
             subscriptions)
-              docker compose -f "${COMPOSE_FILE}" --profile release build web migrate release-tasks
               docker compose -f "${COMPOSE_FILE}" --profile release run --rm migrate
               docker compose -f "${COMPOSE_FILE}" --profile release run --rm release-tasks
-              docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --remove-orphans
-              ;;
-            intera_users)
-              docker compose -f "${COMPOSE_FILE}" --profile release build web migrate
-              docker compose -f "${COMPOSE_FILE}" --profile release run --rm migrate
-              docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --remove-orphans
               ;;
             *)
-              docker compose -f "${COMPOSE_FILE}" --profile release build web migrate
               docker compose -f "${COMPOSE_FILE}" --profile release run --rm migrate
-              docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --remove-orphans
               ;;
           esac
+          docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --remove-orphans
           docker image prune -f || true
           docker compose -f "${COMPOSE_FILE}" ps
           LOCKED
@@ -112,4 +107,5 @@ jobs:
         run: |
           ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
             "docker compose -f '${{ env.DEPLOY_PATH }}/${{ env.COMPOSE_FILE }}' ps"
+
 

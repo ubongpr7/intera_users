@@ -1283,6 +1283,9 @@ def _mcp_connect_frontend_url():
     configured = (os.getenv("MCP_CONNECT_FRONTEND_URL") or "").strip()
     if configured:
         return configured.rstrip("/")
+    site_url = (getattr(settings, "INTERA_IMS_FRONTEND_SITE_URL", "") or "").strip().rstrip("/")
+    if site_url:
+        return f"{site_url}/connect/mcp"
     if getattr(settings, "LOCAL_SERVER", False) or getattr(settings, "DEBUG", False):
         return "http://localhost:3000/connect/mcp"
     return "https://www.interaims.com/connect/mcp"

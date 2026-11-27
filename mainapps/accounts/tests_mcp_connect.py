@@ -1,10 +1,12 @@
 import base64
 import hashlib
+import os
 import secrets
 from urllib.parse import parse_qs, urlparse
+from unittest.mock import patch
 
 from django.core.cache import cache
-from django.test import TestCase, SimpleTestCase
+from django.test import TestCase, SimpleTestCase, override_settings
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
@@ -57,6 +59,20 @@ class McpConnectUtilityTests(SimpleTestCase):
         response = McpConnectRefreshView.as_view()(request)
 
         self.assertEqual(response.status_code, 400)
+
+    @override_settings(
+        DEBUG=True,
+        LOCAL_SERVER=False,
+        INTERA_IMS_FRONTEND_SITE_URL="https://dev.interaims.com",
+    )
+    @patch.dict(os.environ, {"MCP_CONNECT_FRONTEND_URL": ""})
+    def test_mcp_connection_uses_configured_frontend_on_dev(self):
+        from mainapps.accounts.views import _mcp_connect_frontend_url
+
+        self.assertEqual(
+            _mcp_connect_frontend_url(),
+            "https://dev.interaims.com/connect/mcp",
+        )
 
     def test_start_preserves_preferred_workspace_for_browser_selection(self):
         factory = APIRequestFactory()
