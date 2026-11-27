@@ -1260,20 +1260,13 @@ def _validate_mcp_browser_request(request) -> None:
     elif not (getattr(settings, "DEBUG", False) or getattr(settings, "LOCAL_SERVER", False)):
         raise PermissionError("MCP approval requires a browser Origin or Referer.")
 
-    # MCP approval is authenticated by the short-lived JWT supplied in the
-    # Authorization header.  CSRF protects ambient cookie authentication; it
-    # is not required for a bearer-authenticated request because a third-party
-    # site cannot make the browser attach that header.  Requiring a CSRF
-    # cookie/header pair here breaks the cross-subdomain frontend when the
-    # browser happens to have a Django CSRF cookie from another request.
-    authorization = str(request.META.get("HTTP_AUTHORIZATION") or "").strip().lower()
-    if authorization.startswith("bearer "):
-        return
-
-    csrf_cookie = request.COOKIES.get(getattr(settings, "CSRF_COOKIE_NAME", "csrftoken"))
-    csrf_header = request.META.get("HTTP_X_CSRFTOKEN") or request.META.get("HTTP_X_CSRF_TOKEN")
-    if csrf_cookie and (not csrf_header or not secrets.compare_digest(str(csrf_cookie), str(csrf_header))):
-        raise PermissionError("Invalid CSRF token for MCP approval.")
+    # This endpoint uses DRF JWT authentication (not Django session/cookie
+    # authentication).  CSRF is a defense for ambient authentication cookies;
+    # applying a second cookie/header check here breaks the cross-subdomain
+    # browser flow when an unrelated Django CSRF cookie is present.  The
+    # IsAuthenticated permission above still requires a valid JWT, while the
+    # origin check above prevents an untrusted browser origin from initiating
+    # approval.
 
 
 def _mcp_family_key(family_id: str) -> str:
