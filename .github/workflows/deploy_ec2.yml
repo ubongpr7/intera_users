@@ -97,8 +97,13 @@ jobs:
               docker compose -f "${COMPOSE_FILE}" --profile release run --rm migrate
               ;;
           esac
-          # Remove stale containers first so a green build cannot leave the old image running.
-          docker compose -f "${COMPOSE_FILE}" down --remove-orphans
+          # Explicitly remove named containers before recreation; this avoids stale
+          # container_name instances surviving a Compose up on the host.
+          old_containers="$(docker compose -f "${COMPOSE_FILE}" ps -aq || true)"
+          if [ -n "${old_containers}" ]; then
+            docker rm -f ${old_containers}
+          fi
+          docker compose -f "${COMPOSE_FILE}" down --remove-orphans || true
           docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --remove-orphans
           docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || docker restart caddy
           docker image prune -f || true
