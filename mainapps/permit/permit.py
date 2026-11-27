@@ -38,11 +38,10 @@ class HasModelRequestPermission(permissions.BasePermission):
         permission = self._resolve_required_permission(permission, request)
 
         if permission == "create_company":
-            profile_id = getattr(request.user, "profile_id", None)
-            memberships = getattr(request.user, "company_memberships", None)
-            has_memberships = bool(memberships.exists()) if memberships is not None and hasattr(memberships, "exists") else False
-            if not profile_id and not has_memberships:
-                return True
+            return (
+                bool(getattr(request.user, "is_authenticated", False))
+                and not getattr(request.user, "is_affiliate_marketer", False)
+            )
 
         # Internal staff manage platform-owned definitions independently of a tenant role.
         if getattr(request.user, "is_superuser", False) or getattr(request.user, "is_staff", False):
