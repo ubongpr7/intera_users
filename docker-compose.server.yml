@@ -38,7 +38,7 @@ services:
   web:
     <<: *service
     container_name: interaims-dev-users-web
-    command: ["sh", "-c", "exec uvicorn core.asgi:application --host 0.0.0.0 --port 7001 --workers $${WEB_CONCURRENCY:-2}"]
+    command: ["sh", "-c", "exec uvicorn core.asgi:application --host 0.0.0.0 --port 7001 --workers $${WEB_CONCURRENCY:-1}"]
     expose:
       - "7001"
 
