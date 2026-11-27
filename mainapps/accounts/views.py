@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import logging
 import os
 import secrets
 from datetime import timedelta
@@ -79,6 +80,8 @@ from rest_framework_simplejwt.views import (
 )
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+
+logger = logging.getLogger(__name__)
 
 
 class WebSocketTicketView(APIView):
@@ -1192,7 +1195,7 @@ class CompanyMembershipListView(APIView):
 
 
 MCP_CONNECT_REQUEST_TTL = 10 * 60
-MCP_CONNECT_CODE_TTL = 60
+MCP_CONNECT_CODE_TTL = max(60, min(int(os.getenv("MCP_CONNECT_CODE_TTL_SECONDS", "300")), 600))
 MCP_CONNECT_PERMISSION = "interact_with_agent"
 MCP_CONNECT_CLIENT_ID = "intera-cli"
 MCP_CONNECT_RATE_LIMIT = 30
@@ -1459,14 +1462,27 @@ class McpConnectTokenView(APIView):
         payload = cache.get(f"mcp-connect-code:{code}") if code else None
         client_id = _mcp_client_id(data.get("client_id"))
         redirect_uri = _mcp_loopback_redirect_uri(data.get("redirect_uri"))
+        cache_present = bool(payload)
+        client_matches = bool(payload and client_id and client_id == payload.get("client_id"))
+        redirect_matches = bool(payload and redirect_uri and redirect_uri == payload.get("redirect_uri"))
+        pkce_matches = bool(payload and verifier and _mcp_pkce_challenge(verifier) == payload.get("code_challenge"))
         if (
-            not payload
+            not cache_present
             or not verifier
             or not client_id
-            or redirect_uri != payload.get("redirect_uri")
-            or client_id != payload.get("client_id")
-            or _mcp_pkce_challenge(verifier) != payload.get("code_challenge")
+            or not redirect_matches
+            or not client_matches
+            or not pkce_matches
         ):
+            logger.warning(
+                "MCP token exchange rejected: cache_present=%s client_matches=%s "
+                "redirect_matches=%s pkce_matches=%s code_ttl_seconds=%s",
+                cache_present,
+                client_matches,
+                redirect_matches,
+                pkce_matches,
+                MCP_CONNECT_CODE_TTL,
+            )
             return Response({"detail": "Invalid or expired MCP authorization code."}, status=status.HTTP_400_BAD_REQUEST)
         cache.delete(f"mcp-connect-code:{code}")
 
