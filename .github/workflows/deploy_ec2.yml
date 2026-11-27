@@ -90,11 +90,11 @@ jobs:
             kafka_a2a)
               ;;
             subscriptions)
-              docker compose -f "${COMPOSE_FILE}" --profile release run --rm migrate
-              docker compose -f "${COMPOSE_FILE}" --profile release run --rm release-tasks
+              docker compose -f "${COMPOSE_FILE}" --profile release run --rm -T migrate </dev/null
+              docker compose -f "${COMPOSE_FILE}" --profile release run --rm -T release-tasks </dev/null
               ;;
             *)
-              docker compose -f "${COMPOSE_FILE}" --profile release run --rm migrate
+              docker compose -f "${COMPOSE_FILE}" --profile release run --rm -T migrate </dev/null
               ;;
           esac
           # Explicitly remove named containers before recreation; this avoids stale
